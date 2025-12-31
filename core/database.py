@@ -59,7 +59,7 @@ class Database:
                     user_id BIGINT NOT NULL,
                     choice_number INTEGER NOT NULL,
                     amount INTEGER NOT NULL,
-                    PRIMARY KEY (prediction_id, user_id)
+                    PRIMARY KEY (prediction_id, user_id, choice_number)
                 );
                 CREATE TABLE IF NOT EXISTS bot_settings (
                     key TEXT PRIMARY KEY,
@@ -72,7 +72,7 @@ class Database:
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS total_sent INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS total_received INTEGER DEFAULT 0;
             """)
-            
+
             # Migration: Add new prediction columns if they don't exist
             await conn.execute("""
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS creator_id BIGINT;
@@ -82,6 +82,26 @@ class Database:
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS message_id BIGINT;
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS channel_id BIGINT;
             """)
+
+            # Migration: Update prediction_bets primary key to allow multiple choices per user
+            # Check if the old constraint exists and migrate
+            old_constraint = await conn.fetchval("""
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE table_name = 'prediction_bets'
+                AND constraint_type = 'PRIMARY KEY'
+                AND constraint_name = 'prediction_bets_pkey'
+            """)
+            if old_constraint:
+                # Check column count in primary key
+                pk_cols = await conn.fetchval("""
+                    SELECT COUNT(*) FROM information_schema.key_column_usage
+                    WHERE table_name = 'prediction_bets' AND constraint_name = 'prediction_bets_pkey'
+                """)
+                if pk_cols == 2:  # Old schema with (prediction_id, user_id)
+                    await conn.execute("""
+                        ALTER TABLE prediction_bets DROP CONSTRAINT prediction_bets_pkey;
+                        ALTER TABLE prediction_bets ADD PRIMARY KEY (prediction_id, user_id, choice_number);
+                    """)
 
             # Sync initial role prices from ENV if table is empty
             count = await conn.fetchval("SELECT COUNT(*) FROM shop_roles")

@@ -180,28 +180,31 @@ class Points(commands.Cog):
         for idx, row in enumerate(senders, 1):
             member = inter.guild.get_member(row["user_id"])
             name = member.display_name if member else f"User {row['user_id']}"
-            sender_lines.append(f"**{idx}.** {name} - `{row['total_sent']} {Config.POINT_NAME}`")
+            sender_lines.append(
+                f"**{idx}.** {name} - `{row['total_sent']} {Config.POINT_NAME}`"
+            )
 
         # Build receivers list
         receiver_lines = []
         for idx, row in enumerate(receivers, 1):
             member = inter.guild.get_member(row["user_id"])
             name = member.display_name if member else f"User {row['user_id']}"
-            receiver_lines.append(f"**{idx}.** {name} - `{row['total_received']} {Config.POINT_NAME}`")
+            receiver_lines.append(
+                f"**{idx}.** {name} - `{row['total_received']} {Config.POINT_NAME}`"
+            )
 
         embed = disnake.Embed(
-            title=f"💸 Transfer Leaderboard",
-            color=disnake.Color.green()
+            title=f"💸 Transfer Leaderboard", color=disnake.Color.green()
         )
         embed.add_field(
             name="📤 Top Senders",
             value="\n".join(sender_lines) if sender_lines else "No data yet.",
-            inline=True
+            inline=True,
         )
         embed.add_field(
             name="📥 Top Receivers",
             value="\n".join(receiver_lines) if receiver_lines else "No data yet.",
-            inline=True
+            inline=True,
         )
 
         await channel.send(embed=embed)
