@@ -100,7 +100,7 @@ class Points(commands.Cog):
         # Check cooldown (20 seconds)
         now = datetime.datetime.now()
         user_id = inter.author.id
-        
+
         if user_id in self.attack_cooldowns:
             time_passed = (now - self.attack_cooldowns[user_id]).total_seconds()
             if time_passed < 20:
@@ -110,7 +110,7 @@ class Points(commands.Cog):
                     ephemeral=True,
                 )
                 return
-        
+
         # Can't attack yourself
         if target.id == inter.author.id:
             await inter.response.send_message(
@@ -150,6 +150,8 @@ class Points(commands.Cog):
                         "UPDATE users SET points = points + 10 WHERE user_id = $1",
                         target.id,
                     )
+                    # Update cooldown
+                    self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
                         f"⚖️ **It's impossible to win against the Lawmaker!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
                     )
