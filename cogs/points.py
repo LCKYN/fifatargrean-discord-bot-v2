@@ -1,4 +1,5 @@
 import datetime
+import random
 
 import disnake
 from disnake.ext import commands
@@ -88,6 +89,81 @@ class Points(commands.Cog):
             await inter.response.send_message(
                 f"{user.mention} has {points} {Config.POINT_NAME}.", ephemeral=True
             )
+
+    @commands.slash_command(description="Attack another user to steal points")
+    async def attack(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        target: disnake.User = commands.Param(description="User to attack"),
+    ):
+        # Can't attack yourself
+        if target.id == inter.author.id:
+            await inter.response.send_message(
+                "You cannot attack yourself.", ephemeral=True
+            )
+            return
+
+        # Can't attack bots
+        if target.bot:
+            await inter.response.send_message("You cannot attack bots.", ephemeral=True)
+            return
+
+        async with db.pool.acquire() as conn:
+            # Get both users' points
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            target_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", target.id
+            )
+
+            attacker_points = attacker_points or 0
+            target_points = target_points or 0
+
+            # Check both have at least 10 points
+            if attacker_points < 10:
+                await inter.response.send_message(
+                    f"You need at least 10 {Config.POINT_NAME} to attack.",
+                    ephemeral=True,
+                )
+                return
+
+            if target_points < 10:
+                await inter.response.send_message(
+                    f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack.",
+                    ephemeral=True,
+                )
+                return
+
+            # 45% success, 55% fail
+            success = random.random() < 0.45
+
+            if success:
+                # Attacker steals 10 points from target
+                await conn.execute(
+                    "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                    inter.author.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                    target.id,
+                )
+                await inter.response.send_message(
+                    f"💥 **Attack successful!** You stole 10 {Config.POINT_NAME} from {target.mention}!"
+                )
+            else:
+                # Attacker loses 10 points to target
+                await conn.execute(
+                    "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                    inter.author.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                    target.id,
+                )
+                await inter.response.send_message(
+                    f"💔 **Attack failed!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
+                )
 
     async def get_shop_roles(self):
         """Get role prices from database"""
