@@ -19,6 +19,10 @@ class Points(commands.Cog):
         if message.author.bot:
             return
 
+        # Wait for database to be ready
+        if db.pool is None:
+            return
+
         # Check for traps first
         await self.check_traps(message)
 
@@ -116,6 +120,9 @@ class Points(commands.Cog):
 
     async def check_traps(self, message):
         """Check if message triggers any active traps"""
+        if db.pool is None:
+            return
+
         if message.channel.id not in self.active_traps:
             return
 
