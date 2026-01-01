@@ -44,7 +44,7 @@ class BetModal(disnake.ui.Modal):
         async with db.pool.acquire() as conn:
             # Check prediction status
             pred = await conn.fetchrow(
-                "SELECT status, ends_at FROM predictions WHERE id = $1",
+                "SELECT status, ends_at, creator_id FROM predictions WHERE id = $1",
                 self.prediction_id,
             )
             if not pred or pred["status"] != "betting":
@@ -58,6 +58,15 @@ class BetModal(disnake.ui.Modal):
                     "Betting time has ended.", ephemeral=True
                 )
                 return
+
+            # Check if user is the creator (only block non-mods)
+            if pred["creator_id"] == inter.author.id:
+                mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+                if not mod_role or mod_role not in inter.author.roles:
+                    await inter.response.send_message(
+                        "You cannot bet on your own prediction.", ephemeral=True
+                    )
+                    return
 
             # Check if user already bet on THIS choice (can add more)
             existing = await conn.fetchrow(
@@ -523,7 +532,7 @@ class Predictions(commands.Cog):
         modal = BetModal(pred_id, choice_num, choice_text)
         await inter.response.send_modal(modal)
 
-    @commands.slash_command(description="Create a new prediction")
+    @commands.slash_command(description="[MOD] Create a new prediction")
     async def predict(
         self,
         inter: disnake.ApplicationCommandInteraction,
@@ -535,6 +544,14 @@ class Predictions(commands.Cog):
         ),
     ):
         """Start the prediction creation process"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "Only moderators can create predictions.", ephemeral=True
+            )
+            return
+
         # Show modal for title and choices
         modal = CreatePredictionModal(choices, duration)
         await inter.response.send_modal(modal)
