@@ -25,7 +25,7 @@ class Config:
     BASE_POINTS = 10
     DIMINISHING_FACTOR = 0.8
     COOLDOWN_SECONDS = 15
-    PREDICTION_COST = int(os.getenv("PREDICTION_COST", 50))
+    PREDICTION_COST = int(os.getenv("PREDICTION_COST", 30))
 
     # SOOP Notification (disabled by default)
     SOOP_CLIENT_ID = os.getenv("SOOP_CLIENT_ID", "")

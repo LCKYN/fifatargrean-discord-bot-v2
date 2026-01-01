@@ -71,6 +71,8 @@ class Database:
             await conn.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS total_sent INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS total_received INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_earned INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_earned_date DATE;
             """)
 
             # Migration: Add new prediction columns if they don't exist

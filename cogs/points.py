@@ -12,11 +12,15 @@ class Points(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.attack_cooldowns = {}  # Track last attack time per user
+        self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
 
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
             return
+
+        # Check for traps first
+        await self.check_traps(message)
 
         async with db.pool.acquire() as conn:
             user = await conn.fetchrow(
@@ -24,46 +28,194 @@ class Points(commands.Cog):
             )
             now = datetime.datetime.now()
 
-            points_to_add = 1
+            points_to_add = 5
+            is_first_of_day = False
 
             if not user:
-                # First time user ever
-                points_to_add = 10
+                # First time user ever - give 20 points
+                points_to_add = 20
+                is_first_of_day = True
+                current_points = 0
+                daily_earned = 0
                 await conn.execute(
-                    "INSERT INTO users (user_id, points, last_message_at) VALUES ($1, $2, $3)",
+                    "INSERT INTO users (user_id, points, last_message_at, daily_earned, daily_earned_date) VALUES ($1, $2, $3, $2, $4)",
                     message.author.id,
                     points_to_add,
                     now,
+                    now.date(),
                 )
             else:
                 last_msg = user["last_message_at"]
+                current_points = user["points"] or 0
+
+                # Get daily earned (reset if new day)
+                daily_earned_date = user.get("daily_earned_date")
+                if daily_earned_date is None or daily_earned_date < now.date():
+                    daily_earned = 0
+                else:
+                    daily_earned = user.get("daily_earned") or 0
 
                 # Check if first message of the day
                 if last_msg is None or last_msg.date() < now.date():
-                    points_to_add = 10
+                    points_to_add = 20
+                    is_first_of_day = True
+                    daily_earned = 0  # Reset daily earned for new day
                 else:
-                    # Regular message, check cooldown
-                    if (now - last_msg).total_seconds() < Config.COOLDOWN_SECONDS:
+                    # Regular message, check cooldown (15 seconds)
+                    if (now - last_msg).total_seconds() < 15:
                         return
-                    points_to_add = 1
+                    points_to_add = 5
+
+                # Check daily cap (400 points per day from chatting)
+                if daily_earned >= 400:
+                    return  # Already hit daily cap
+
+                # Limit points_to_add to not exceed cap
+                if daily_earned + points_to_add > 400:
+                    points_to_add = 400 - daily_earned
+
+                if points_to_add <= 0:
+                    return
+
+                # Apply critical/bad luck based on current points
+                if current_points < 500:
+                    # 20% chance for critical (2x points)
+                    if random.random() < 0.20:
+                        points_to_add *= 2
+                elif current_points < 1500:
+                    # 40% chance for bad luck (0 points)
+                    if random.random() < 0.40:
+                        points_to_add = 0
+
+                if points_to_add <= 0:
+                    # Update last_message_at even if 0 points
+                    await conn.execute(
+                        "UPDATE users SET last_message_at = $1 WHERE user_id = $2",
+                        now,
+                        message.author.id,
+                    )
+                    return
+
+                # Check if user has server booster role for 1.5x bonus
+                if message.guild:
+                    booster_role = message.guild.get_role(939954575216107540)
+                    if booster_role and booster_role in message.author.roles:
+                        # 50% chance for extra 0.5x (so either 1x or 1.5x total)
+                        if random.random() < 0.50:
+                            bonus = int(points_to_add * 0.5)
+                            points_to_add += bonus
 
                 await conn.execute(
-                    "UPDATE users SET points = points + $1, last_message_at = $2 WHERE user_id = $3",
+                    "UPDATE users SET points = points + $1, last_message_at = $2, daily_earned = $3, daily_earned_date = $4 WHERE user_id = $5",
                     points_to_add,
                     now,
+                    daily_earned + points_to_add,
+                    now.date(),
                     message.author.id,
                 )
 
-            # Check if user has server booster role for 2x points
-            if message.guild:
-                booster_role = message.guild.get_role(939954575216107540)
-                if booster_role and booster_role in message.author.roles:
-                    # Give bonus points (same amount again for 2x total)
+    async def check_traps(self, message):
+        """Check if message triggers any active traps"""
+        if message.channel.id not in self.active_traps:
+            return
+
+        channel_traps = self.active_traps[message.channel.id]
+        message_lower = message.content.lower()
+        triggered_trap = None
+
+        for trigger_text, (creator_id, created_at) in list(channel_traps.items()):
+            if trigger_text.lower() in message_lower:
+                # Don't trigger on trap creator
+                if message.author.id == creator_id:
+                    continue
+                triggered_trap = (trigger_text, creator_id)
+                break
+
+        if triggered_trap:
+            trigger_text, creator_id = triggered_trap
+
+            async with db.pool.acquire() as conn:
+                # Check if victim has at least 10 points
+                victim_points = await conn.fetchval(
+                    "SELECT points FROM users WHERE user_id = $1", message.author.id
+                )
+                victim_points = victim_points or 0
+
+                if victim_points >= 10:
+                    # Steal 10 points from victim and give to trap creator
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                        points_to_add,
+                        "UPDATE users SET points = points - 10 WHERE user_id = $1",
                         message.author.id,
                     )
+                    await conn.execute(
+                        """INSERT INTO users (user_id, points) VALUES ($1, 10)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 10""",
+                        creator_id,
+                    )
+
+                    # Remove the trap after triggered
+                    del channel_traps[trigger_text]
+                    if not channel_traps:
+                        del self.active_traps[message.channel.id]
+
+                    # Notify about trap
+                    creator = message.guild.get_member(creator_id)
+                    creator_name = (
+                        creator.display_name if creator else f"User {creator_id}"
+                    )
+                    await message.reply(
+                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 10 {Config.POINT_NAME}!"
+                    )
+
+    @commands.slash_command(description="Set a trap with a trigger word")
+    async def trap(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        trigger: str = commands.Param(
+            description="Text that will trigger the trap", max_length=50
+        ),
+    ):
+        """Set a trap that steals 10 points from whoever types the trigger text"""
+        trigger_lower = trigger.lower()
+
+        # Check if user has at least 10 points to set a trap
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < 10:
+                await inter.response.send_message(
+                    f"You need at least 10 {Config.POINT_NAME} to set a trap.",
+                    ephemeral=True,
+                )
+                return
+
+        # Check if trap already exists in this channel
+        if inter.channel.id in self.active_traps:
+            if trigger_lower in [
+                t.lower() for t in self.active_traps[inter.channel.id]
+            ]:
+                await inter.response.send_message(
+                    "A trap with this trigger already exists in this channel.",
+                    ephemeral=True,
+                )
+                return
+
+        # Set the trap
+        if inter.channel.id not in self.active_traps:
+            self.active_traps[inter.channel.id] = {}
+
+        self.active_traps[inter.channel.id][trigger] = (
+            inter.author.id,
+            datetime.datetime.now(),
+        )
+
+        await inter.response.send_message(
+            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel will lose 10 {Config.POINT_NAME} to you!',
+            ephemeral=True,
+        )
 
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
