@@ -15,7 +15,7 @@ import disnake
 from disnake.ext import commands
 
 from core.config import Config
-from core.logger import log, cleanup_old_logs
+from core.logger import cleanup_old_logs, log
 
 # URL regex pattern for detecting links
 URL_PATTERN = re.compile(
@@ -67,7 +67,7 @@ class SpamTracker:
             self.messages[user_id] = []  # Clear after detection
             return {
                 "all_messages": "\n".join(all_messages),
-                "channel_count": len(unique_channels)
+                "channel_count": len(unique_channels),
             }
 
         return None
@@ -118,21 +118,29 @@ class SpamDetector(commands.Cog):
 
         # Log unique channel count
         unique_channels = self.spam_tracker.get_unique_channel_count(message.author.id)
-        log("spam_detector", "link_detected", {
-            "user_id": message.author.id,
-            "user_name": str(message.author),
-            "channel_id": message.channel.id,
-            "channel_name": message.channel.name,
-            "unique_channels": unique_channels,
-            "content_preview": message.content[:100]
-        })
-
-        if spam_result:
-            log("spam_detector", "spam_detected", {
+        log(
+            "spam_detector",
+            "link_detected",
+            {
                 "user_id": message.author.id,
                 "user_name": str(message.author),
-                "channel_count": spam_result['channel_count']
-            })
+                "channel_id": message.channel.id,
+                "channel_name": message.channel.name,
+                "unique_channels": unique_channels,
+                "content_preview": message.content[:100],
+            },
+        )
+
+        if spam_result:
+            log(
+                "spam_detector",
+                "spam_detected",
+                {
+                    "user_id": message.author.id,
+                    "user_name": str(message.author),
+                    "channel_count": spam_result["channel_count"],
+                },
+            )
             await self.handle_spam(message, spam_result["all_messages"])
 
     async def handle_spam(self, message: disnake.Message, all_messages: str):
@@ -144,10 +152,11 @@ class SpamDetector(commands.Cog):
         # Don't ban mods/admins
         mod_role = guild.get_role(Config.MOD_ROLE_ID)
         if mod_role and mod_role in user.roles:
-            log("spam_detector", "mod_test_triggered", {
-                "user_id": user.id,
-                "user_name": str(user)
-            })
+            log(
+                "spam_detector",
+                "mod_test_triggered",
+                {"user_id": user.id, "user_name": str(user)},
+            )
             # DM the mod to confirm detection worked
             try:
                 await user.send(
@@ -159,10 +168,11 @@ class SpamDetector(commands.Cog):
                 pass
             return
         if user.guild_permissions.administrator:
-            log("spam_detector", "admin_skipped", {
-                "user_id": user.id,
-                "user_name": str(user)
-            })
+            log(
+                "spam_detector",
+                "admin_skipped",
+                {"user_id": user.id, "user_name": str(user)},
+            )
             return
 
         # Don't ban bot owner (safety check)
@@ -220,32 +230,42 @@ class SpamDetector(commands.Cog):
                         description=f"Auto-banned **{user}** for link spam in **{guild.name}**",
                         color=disnake.Color.red(),
                     )
-                    dm_embed.add_field(name="Channel", value=f"#{channel.name}", inline=True)
+                    dm_embed.add_field(
+                        name="Channel", value=f"#{channel.name}", inline=True
+                    )
                     dm_embed.add_field(name="User ID", value=str(user.id), inline=True)
                     await owner.send(embed=dm_embed)
             except disnake.Forbidden:
                 pass  # Owner has DMs disabled
 
             # Log successful ban
-            log("spam_detector", "user_banned", {
-                "user_id": user.id,
-                "user_name": str(user),
-                "channel_id": channel.id,
-                "channel_name": channel.name
-            })
+            log(
+                "spam_detector",
+                "user_banned",
+                {
+                    "user_id": user.id,
+                    "user_name": str(user),
+                    "channel_id": channel.id,
+                    "channel_name": channel.name,
+                },
+            )
 
         except disnake.Forbidden:
-            log("spam_detector", "ban_failed", {
-                "user_id": user.id,
-                "user_name": str(user),
-                "reason": "missing_permissions"
-            })
+            log(
+                "spam_detector",
+                "ban_failed",
+                {
+                    "user_id": user.id,
+                    "user_name": str(user),
+                    "reason": "missing_permissions",
+                },
+            )
         except Exception as e:
-            log("spam_detector", "ban_error", {
-                "user_id": user.id,
-                "user_name": str(user),
-                "error": str(e)
-            })
+            log(
+                "spam_detector",
+                "ban_error",
+                {"user_id": user.id, "user_name": str(user), "error": str(e)},
+            )
 
     @commands.slash_command(description="[MOD] Unban a user banned by spam detector")
     async def spamunban(
@@ -394,21 +414,23 @@ class SpamDetector(commands.Cog):
             dm_embed.add_field(
                 name="Settings",
                 value=f"• Trigger: **4 link messages** in **30 seconds**\n"
-                      f"• Ignored channels: **{len(self.ignore_channels)}**\n"
-                      f"• Mod channel set: **{'Yes' if self.mod_channel_id else 'No'}**",
-                inline=False
+                f"• Ignored channels: **{len(self.ignore_channels)}**\n"
+                f"• Mod channel set: **{'Yes' if self.mod_channel_id else 'No'}**",
+                inline=False,
             )
             dm_embed.add_field(
                 name="Note",
                 value="Mods and admins are exempt from auto-ban.",
-                inline=False
+                inline=False,
             )
             await inter.author.send(embed=dm_embed)
-            await inter.followup.send("✅ Spam detector is working! Check your DMs.", ephemeral=True)
+            await inter.followup.send(
+                "✅ Spam detector is working! Check your DMs.", ephemeral=True
+            )
         except disnake.Forbidden:
             await inter.followup.send(
                 "✅ Spam detector is working, but I couldn't DM you (DMs disabled).",
-                ephemeral=True
+                ephemeral=True,
             )
 
 

@@ -23,7 +23,7 @@ async def on_ready():
     print(f"Slash commands synced: {len(bot.slash_commands)}")
     await db.connect()
     print("Database connected")
-    
+
     # Cleanup old log files (keep 30 days)
     cleanup_old_logs()
     print("Log cleanup completed")
@@ -37,7 +37,11 @@ async def on_close():
 
 # Load Cogs (skip disabled cogs ending with _disabled.py)
 for filename in os.listdir("./cogs"):
-    if filename.endswith(".py") and not filename.endswith("_disabled.py") and filename != "__init__.py":
+    if (
+        filename.endswith(".py")
+        and not filename.endswith("_disabled.py")
+        and filename != "__init__.py"
+    ):
         bot.load_extension(f"cogs.{filename[:-3]}")
 
 if __name__ == "__main__":
