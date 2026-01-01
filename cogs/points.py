@@ -23,6 +23,39 @@ class Points(commands.Cog):
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
 
     @commands.Cog.listener()
+    async def on_member_join(self, member: disnake.Member):
+        """Give 1000 points to first-time members"""
+        if member.bot:
+            return
+
+        # Wait for database to be ready
+        if db.pool is None:
+            return
+
+        async with db.pool.acquire() as conn:
+            # Check if user already exists in database
+            existing = await conn.fetchval(
+                "SELECT user_id FROM users WHERE user_id = $1", member.id
+            )
+
+            if not existing:
+                # First time user - give 1000 points
+                await conn.execute(
+                    "INSERT INTO users (user_id, points) VALUES ($1, 1000)",
+                    member.id,
+                )
+
+                # Send welcome message to bot channel
+                channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+                if channel:
+                    embed = disnake.Embed(
+                        title="🎉 Welcome Bonus!",
+                        description=f"Welcome {member.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
+                        color=disnake.Color.green(),
+                    )
+                    await channel.send(embed=embed)
+
+    @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
             return
@@ -974,6 +1007,8 @@ class Points(commands.Cog):
             await inter.response.send_message("Price must be positive.", ephemeral=True)
             return
 
+        await inter.response.defer(ephemeral=True)
+
         async with db.pool.acquire() as conn:
             await conn.execute(
                 """
@@ -984,6 +1019,28 @@ class Points(commands.Cog):
                 price,
             )
 
+            # Find all members who currently have this role and reassign with 1440 min duration
+            members_with_role = [m for m in inter.guild.members if role in m.roles]
+            reassigned_count = 0
+            expires_at = datetime.datetime.now() + datetime.timedelta(minutes=1440)
+
+            for member in members_with_role:
+                # Skip bots
+                if member.bot:
+                    continue
+                # Add/update temp_roles entry
+                await conn.execute(
+                    """
+                    INSERT INTO temp_roles (user_id, role_id, expires_at)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, role_id) DO UPDATE SET expires_at = $3
+                    """,
+                    member.id,
+                    role.id,
+                    expires_at,
+                )
+                reassigned_count += 1
+
         channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
         if channel:
             embed = disnake.Embed(
@@ -991,12 +1048,18 @@ class Points(commands.Cog):
                 description=f"{inter.author.mention} added **{role.name}** to the shop for **{price} {Config.POINT_NAME}**",
                 color=disnake.Color.green(),
             )
+            if reassigned_count > 0:
+                embed.add_field(
+                    name="📋 Existing Role Holders",
+                    value=f"**{reassigned_count}** members with this role have been given 1440 minutes (24 hours) duration",
+                    inline=False,
+                )
             await channel.send(embed=embed)
 
-        await inter.response.send_message(
-            f"Added **{role.name}** to shop with price {price} {Config.POINT_NAME}",
-            ephemeral=True,
-        )
+        msg = f"Added **{role.name}** to shop with price {price} {Config.POINT_NAME}"
+        if reassigned_count > 0:
+            msg += f"\n\n📋 Found **{reassigned_count}** members with this role - assigned 1440 min duration to all."
+        await inter.followup.send(msg, ephemeral=True)
 
     @commands.slash_command(description="[MOD] Remove a role from the shop")
     async def shopremove(

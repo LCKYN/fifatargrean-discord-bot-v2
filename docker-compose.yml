@@ -22,8 +22,7 @@ services:
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # No ports exposed - only accessible from bot container via internal network
 
 volumes:
   db_data:
