@@ -129,6 +129,20 @@ class Points(commands.Cog):
         channel_traps = self.active_traps[message.channel.id]
         message_lower = message.content.lower()
         triggered_trap = None
+        now = datetime.datetime.now()
+
+        # Clean up expired traps (2 minutes)
+        expired_traps = []
+        for trigger_text, (creator_id, created_at) in list(channel_traps.items()):
+            if (now - created_at).total_seconds() > 120:  # 2 minutes
+                expired_traps.append(trigger_text)
+
+        for trigger_text in expired_traps:
+            del channel_traps[trigger_text]
+
+        if not channel_traps:
+            del self.active_traps[message.channel.id]
+            return
 
         for trigger_text, (creator_id, created_at) in list(channel_traps.items()):
             if trigger_text.lower() in message_lower:
@@ -220,7 +234,7 @@ class Points(commands.Cog):
         )
 
         await inter.response.send_message(
-            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel will lose 10 {Config.POINT_NAME} to you!',
+            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 10 {Config.POINT_NAME} to you!',
             ephemeral=True,
         )
 
