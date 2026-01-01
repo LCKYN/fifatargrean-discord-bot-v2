@@ -20,6 +20,7 @@ class Points(commands.Cog):
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
         self.dodge_cooldowns = {}  # Track last dodge time per user
         self.active_dodges = {}  # {user_id: activated_at}
+        self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -568,6 +569,142 @@ class Points(commands.Cog):
             f"🛡️ **Dodge activated!** (-50 {Config.POINT_NAME}) The next attack against you within 5 minutes will automatically fail!",
             ephemeral=True,
         )
+
+    @commands.slash_command(description="Start an airdrop for users to claim points")
+    async def airdrop(self, inter: disnake.ApplicationCommandInteraction):
+        """Mod-only: Start an airdrop where first 10 users can claim 100 points"""
+        # Check if user is a mod
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "Only moderators can start airdrops.", ephemeral=True
+            )
+            return
+
+        # Send airdrop message
+        embed = disnake.Embed(
+            title="💸 AIRDROP!",
+            description=f"React with 💸 to claim **100 {Config.POINT_NAME}**!\n\n"
+            f"• First **5** users only!\n"
+            f"• < 500 {Config.POINT_NAME}: 50% chance for 2x\n"
+            f"• > 1500 {Config.POINT_NAME}: 70% chance for nothing",
+            color=disnake.Color.gold(),
+        )
+        embed.set_footer(text="0/5 claimed")
+
+        await inter.response.send_message(embed=embed)
+        msg = await inter.original_message()
+
+        # Add reaction
+        await msg.add_reaction("💸")
+
+        # Track this airdrop
+        self.active_airdrops[msg.id] = {"claimed_users": set(), "count": 0}
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: disnake.RawReactionActionEvent):
+        """Handle airdrop reactions"""
+        # Ignore bot reactions
+        if payload.user_id == self.bot.user.id:
+            return
+
+        # Check if this is an active airdrop
+        if payload.message_id not in self.active_airdrops:
+            return
+
+        # Check if it's the correct emoji
+        if str(payload.emoji) != "💸":
+            return
+
+        airdrop = self.active_airdrops[payload.message_id]
+
+        # Check if already claimed
+        if payload.user_id in airdrop["claimed_users"]:
+            return
+
+        # Check if airdrop is full
+        if airdrop["count"] >= 5:
+            return
+
+        # Wait for database
+        if db.pool is None:
+            return
+
+        async with db.pool.acquire() as conn:
+            # Get user's current points
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", payload.user_id
+            )
+            user_points = user_points or 0
+
+            points_to_give = 100
+            result_type = "normal"
+
+            # Apply luck mechanics
+            if user_points > 1500:
+                # 70% chance for bad luck (get nothing)
+                if random.random() < 0.70:
+                    points_to_give = 0
+                    result_type = "bad_luck"
+            elif user_points < 500:
+                # 50% chance for crit (2x)
+                if random.random() < 0.50:
+                    points_to_give *= 2
+                    result_type = "crit"
+
+            # Mark as claimed
+            airdrop["claimed_users"].add(payload.user_id)
+            airdrop["count"] += 1
+
+            if points_to_give > 0:
+                # Give points
+                await conn.execute(
+                    """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                       ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
+                    payload.user_id,
+                    points_to_give,
+                )
+
+            # Get channel and send notification
+            channel = self.bot.get_channel(payload.channel_id)
+            if channel:
+                user = self.bot.get_user(payload.user_id)
+                user_mention = user.mention if user else f"<@{payload.user_id}>"
+
+                if result_type == "bad_luck":
+                    await channel.send(
+                        f"💸 {user_mention} claimed the airdrop but got **nothing** (bad luck)! [{airdrop['count']}/10]"
+                    )
+                elif result_type == "crit":
+                    await channel.send(
+                        f"💸✨ {user_mention} claimed the airdrop with **CRIT** and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/10]"
+                    )
+                else:
+                    await channel.send(
+                        f"💸 {user_mention} claimed the airdrop and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/10]"
+                    )
+
+                # Update embed footer if airdrop is full
+                if airdrop["count"] >= 5:
+                    try:
+                        msg = await channel.fetch_message(payload.message_id)
+                        embed = msg.embeds[0]
+                        embed.set_footer(text="5/5 claimed - AIRDROP ENDED")
+                        embed.color = disnake.Color.dark_grey()
+                        await msg.edit(embed=embed)
+                        # Clean up
+                        del self.active_airdrops[payload.message_id]
+                    except:
+                        pass
+                else:
+                    # Update footer with current count
+                    try:
+                        msg = await channel.fetch_message(payload.message_id)
+                        embed = msg.embeds[0]
+                        embed.set_footer(text=f"{airdrop['count']}/5 claimed")
+                        await msg.edit(embed=embed)
+                    except:
+                        pass
 
     async def get_shop_roles(self):
         """Get role prices from database"""
