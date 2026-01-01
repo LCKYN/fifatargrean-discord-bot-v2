@@ -1,11 +1,15 @@
 import datetime
 import random
+from datetime import timedelta, timezone
 
 import disnake
 from disnake.ext import commands
 
 from core.config import Config
 from core.database import db
+
+# Bangkok timezone (UTC+7)
+BANGKOK_TZ = timezone(timedelta(hours=7))
 
 
 class Points(commands.Cog):
@@ -34,6 +38,8 @@ class Points(commands.Cog):
                 "SELECT * FROM users WHERE user_id = $1", message.author.id
             )
             now = datetime.datetime.now()
+            now_bangkok = datetime.datetime.now(BANGKOK_TZ)
+            today_bangkok = now_bangkok.date()
 
             points_to_add = 5
             is_first_of_day = False
@@ -49,29 +55,42 @@ class Points(commands.Cog):
                     message.author.id,
                     points_to_add,
                     now,
-                    now.date(),
+                    today_bangkok,
                 )
             else:
                 last_msg = user["last_message_at"]
                 current_points = user["points"] or 0
 
-                # Get daily earned (reset if new day)
+                # Get daily earned (reset if new day in Bangkok timezone)
                 daily_earned_date = user.get("daily_earned_date")
-                if daily_earned_date is None or daily_earned_date < now.date():
+                if daily_earned_date is None or daily_earned_date < today_bangkok:
                     daily_earned = 0
                 else:
                     daily_earned = user.get("daily_earned") or 0
 
-                # Check if first message of the day
-                if last_msg is None or last_msg.date() < now.date():
+                # Check if first message of the day (Bangkok time)
+                if last_msg is None:
                     points_to_add = 20
                     is_first_of_day = True
-                    daily_earned = 0  # Reset daily earned for new day
+                    daily_earned = 0
                 else:
-                    # Regular message, check cooldown (15 seconds)
-                    if (now - last_msg).total_seconds() < 15:
-                        return
-                    points_to_add = 5
+                    # Convert last_msg to Bangkok timezone to check date
+                    if last_msg.tzinfo is None:
+                        last_msg_bangkok = last_msg.replace(
+                            tzinfo=timezone.utc
+                        ).astimezone(BANGKOK_TZ)
+                    else:
+                        last_msg_bangkok = last_msg.astimezone(BANGKOK_TZ)
+
+                    if last_msg_bangkok.date() < today_bangkok:
+                        points_to_add = 20
+                        is_first_of_day = True
+                        daily_earned = 0  # Reset daily earned for new day
+                    else:
+                        # Regular message, check cooldown (15 seconds)
+                        if (now - last_msg.replace(tzinfo=None)).total_seconds() < 15:
+                            return
+                        points_to_add = 5
 
                 # Check daily cap (400 points per day from chatting)
                 if daily_earned >= 400:
@@ -117,7 +136,7 @@ class Points(commands.Cog):
                     points_to_add,
                     now,
                     daily_earned + points_to_add,
-                    now.date(),
+                    today_bangkok,
                     message.author.id,
                 )
 
