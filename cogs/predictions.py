@@ -532,7 +532,7 @@ class Predictions(commands.Cog):
         modal = BetModal(pred_id, choice_num, choice_text)
         await inter.response.send_modal(modal)
 
-    @commands.slash_command(description="[MOD] Create a new prediction")
+    @commands.slash_command(description="Create a new prediction")
     async def predict(
         self,
         inter: disnake.ApplicationCommandInteraction,
@@ -544,14 +544,6 @@ class Predictions(commands.Cog):
         ),
     ):
         """Start the prediction creation process"""
-        # Check if user has mod role
-        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
-        if not mod_role or mod_role not in inter.author.roles:
-            await inter.response.send_message(
-                "Only moderators can create predictions.", ephemeral=True
-            )
-            return
-
         # Show modal for title and choices
         modal = CreatePredictionModal(choices, duration)
         await inter.response.send_modal(modal)
