@@ -11,6 +11,7 @@ from core.database import db
 class Points(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.attack_cooldowns = {}  # Track last attack time per user
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -96,6 +97,20 @@ class Points(commands.Cog):
         inter: disnake.ApplicationCommandInteraction,
         target: disnake.User = commands.Param(description="User to attack"),
     ):
+        # Check cooldown (20 seconds)
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+        
+        if user_id in self.attack_cooldowns:
+            time_passed = (now - self.attack_cooldowns[user_id]).total_seconds()
+            if time_passed < 20:
+                remaining = 20 - int(time_passed)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining} more seconds before attacking again.",
+                    ephemeral=True,
+                )
+                return
+        
         # Can't attack yourself
         if target.id == inter.author.id:
             await inter.response.send_message(
@@ -107,6 +122,38 @@ class Points(commands.Cog):
         if target.bot:
             await inter.response.send_message("You cannot attack bots.", ephemeral=True)
             return
+
+        # Check if target is a mod - mods always win
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            target_member = inter.guild.get_member(target.id)
+            if mod_role and target_member and mod_role in target_member.roles:
+                async with db.pool.acquire() as conn:
+                    attacker_points = await conn.fetchval(
+                        "SELECT points FROM users WHERE user_id = $1", inter.author.id
+                    )
+                    attacker_points = attacker_points or 0
+
+                    if attacker_points < 10:
+                        await inter.response.send_message(
+                            f"You need at least 10 {Config.POINT_NAME} to attack.",
+                            ephemeral=True,
+                        )
+                        return
+
+                    # Attacker automatically loses against mod
+                    await conn.execute(
+                        "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                    await conn.execute(
+                        "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                        target.id,
+                    )
+                    await inter.response.send_message(
+                        f"⚖️ **It's impossible to win against the Lawmaker!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
+                    )
+                return
 
         async with db.pool.acquire() as conn:
             # Get both users' points
@@ -148,6 +195,8 @@ class Points(commands.Cog):
                     "UPDATE users SET points = points - 10 WHERE user_id = $1",
                     target.id,
                 )
+                # Update cooldown
+                self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
                     f"💥 **Attack successful!** You stole 10 {Config.POINT_NAME} from {target.mention}!"
                 )
@@ -161,6 +210,8 @@ class Points(commands.Cog):
                     "UPDATE users SET points = points + 10 WHERE user_id = $1",
                     target.id,
                 )
+                # Update cooldown
+                self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
                     f"💔 **Attack failed!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
                 )
