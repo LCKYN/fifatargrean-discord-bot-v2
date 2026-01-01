@@ -71,13 +71,7 @@ class Points(commands.Cog):
 
     @commands.slash_command(description="Show all available roles and prices")
     async def shop(self, inter: disnake.ApplicationCommandInteraction):
-        channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
-
-        if not channel:
-            await inter.response.send_message(
-                f"Bot channel (ID: {Config.BOT_CHANNEL_ID}) not found!", ephemeral=True
-            )
-            return
+        channel = inter.channel
 
         # Build role list from database
         role_prices = await self.get_shop_roles()
@@ -104,9 +98,7 @@ class Points(commands.Cog):
             for i in range(0, len(role_items), chunk_size)
         ]
 
-        await inter.response.send_message(
-            f"Shop posted to {channel.mention}", ephemeral=True
-        )
+        await inter.response.defer()
 
         for idx, chunk in enumerate(chunks):
             embed = disnake.Embed(
@@ -118,18 +110,10 @@ class Points(commands.Cog):
             embed.set_footer(
                 text=f"Use /buyrole @role to purchase • Duration: {Config.ROLE_DURATION_MINUTES} minute(s)"
             )
-            await channel.send(embed=embed)
+            await inter.followup.send(embed=embed)
 
     @commands.slash_command(description="Show top 10 leaderboard")
     async def leaderboard(self, inter: disnake.ApplicationCommandInteraction):
-        channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
-
-        if not channel:
-            await inter.response.send_message(
-                f"Bot channel (ID: {Config.BOT_CHANNEL_ID}) not found!", ephemeral=True
-            )
-            return
-
         async with db.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT user_id, points FROM users ORDER BY points DESC LIMIT 10"
@@ -150,21 +134,10 @@ class Points(commands.Cog):
 
             embed.description = description or "No data yet."
 
-            await channel.send(embed=embed)
-            await inter.response.send_message(
-                f"Leaderboard sent to {channel.mention}", ephemeral=True
-            )
+            await inter.response.send_message(embed=embed, ephemeral=True)
 
     @commands.slash_command(description="Show top 10 senders and receivers")
     async def transfers(self, inter: disnake.ApplicationCommandInteraction):
-        channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
-
-        if not channel:
-            await inter.response.send_message(
-                f"Bot channel (ID: {Config.BOT_CHANNEL_ID}) not found!", ephemeral=True
-            )
-            return
-
         async with db.pool.acquire() as conn:
             # Top 10 senders
             senders = await conn.fetch(
@@ -207,10 +180,7 @@ class Points(commands.Cog):
             inline=True,
         )
 
-        await channel.send(embed=embed)
-        await inter.response.send_message(
-            f"Transfer leaderboard sent to {channel.mention}", ephemeral=True
-        )
+        await inter.response.send_message(embed=embed, ephemeral=True)
 
     @commands.slash_command(description="[MOD] Add points to a user")
     async def addpoint(
