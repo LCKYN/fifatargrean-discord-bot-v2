@@ -12,6 +12,7 @@ class Points(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.attack_cooldowns = {}  # Track last attack time per user
+        self.trap_cooldowns = {}  # Track last trap time per user
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
 
     @commands.Cog.listener()
@@ -197,6 +198,20 @@ class Points(commands.Cog):
         ),
     ):
         """Set a trap that steals 10 points from whoever types the trigger text"""
+        # Check cooldown (1 minute)
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+
+        if user_id in self.trap_cooldowns:
+            time_passed = (now - self.trap_cooldowns[user_id]).total_seconds()
+            if time_passed < 60:
+                remaining = 60 - int(time_passed)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining} more seconds before setting another trap.",
+                    ephemeral=True,
+                )
+                return
+
         trigger_lower = trigger.lower()
 
         # Check if user has at least 10 points to set a trap
@@ -232,6 +247,9 @@ class Points(commands.Cog):
             inter.author.id,
             datetime.datetime.now(),
         )
+
+        # Update cooldown
+        self.trap_cooldowns[user_id] = now
 
         await inter.response.send_message(
             f'💣 Trap set! Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 10 {Config.POINT_NAME} to you!',
