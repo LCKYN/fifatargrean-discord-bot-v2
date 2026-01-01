@@ -14,6 +14,8 @@ class Points(commands.Cog):
         self.attack_cooldowns = {}  # Track last attack time per user
         self.trap_cooldowns = {}  # Track last trap time per user
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
+        self.dodge_cooldowns = {}  # Track last dodge time per user
+        self.active_dodges = {}  # {user_id: activated_at}
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -194,12 +196,12 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         trigger: str = commands.Param(
-            description="Text that will trigger the trap (min 3 chars)",
-            min_length=3,
+            description="Text that will trigger the trap (min 5 chars)",
+            min_length=5,
             max_length=50,
         ),
     ):
-        """Set a trap that steals 10 points from whoever types the trigger text"""
+        """Set a trap that steals 50 points from whoever types the trigger text (costs 10 points)"""
         # Check cooldown (1 minute)
         now = datetime.datetime.now()
         user_id = inter.author.id
@@ -216,19 +218,25 @@ class Points(commands.Cog):
 
         trigger_lower = trigger.lower()
 
-        # Check if user has at least 50 points to set a trap
+        # Check if user has at least 10 points to set a trap (cost)
         async with db.pool.acquire() as conn:
             user_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", inter.author.id
             )
             user_points = user_points or 0
 
-            if user_points < 50:
+            if user_points < 10:
                 await inter.response.send_message(
-                    f"You need at least 50 {Config.POINT_NAME} to set a trap.",
+                    f"You need at least 10 {Config.POINT_NAME} to set a trap.",
                     ephemeral=True,
                 )
                 return
+
+            # Deduct 10 points for setting trap
+            await conn.execute(
+                "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                inter.author.id,
+            )
 
         # Check if trap already exists in this channel
         if inter.channel.id in self.active_traps:
@@ -254,7 +262,7 @@ class Points(commands.Cog):
         self.trap_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 50 {Config.POINT_NAME} to you!',
+            f'💣 Trap set! (-10 {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 50 {Config.POINT_NAME} to you!',
             ephemeral=True,
         )
 
@@ -382,9 +390,27 @@ class Points(commands.Cog):
                 )
                 return
 
-            # 45% success normally, 35% if attacking with more than 100 points
-            win_chance = 0.35 if amount > 100 else 0.45
-            success = random.random() < win_chance
+            # Check if target has active dodge
+            target_has_dodge = False
+            if target.id in self.active_dodges:
+                dodge_time = self.active_dodges[target.id]
+                if (
+                    datetime.datetime.now() - dodge_time
+                ).total_seconds() < 300:  # 5 minutes
+                    target_has_dodge = True
+                    # Remove dodge after use
+                    del self.active_dodges[target.id]
+                else:
+                    # Expired dodge, clean up
+                    del self.active_dodges[target.id]
+
+            if target_has_dodge:
+                # Dodge makes attacker always fail
+                success = False
+            else:
+                # 45% success normally, 35% if attacking with more than 100 points
+                win_chance = 0.35 if amount > 100 else 0.45
+                success = random.random() < win_chance
 
             if success:
                 # Attacker steals points from target
@@ -417,9 +443,76 @@ class Points(commands.Cog):
                 )
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
+                if target_has_dodge:
+                    await inter.response.send_message(
+                        f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
+                    )
+                else:
+                    await inter.response.send_message(
+                        f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
+                    )
+
+    @commands.slash_command(description="Activate dodge to block the next attack")
+    async def dodge(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+    ):
+        """Activate dodge to block the next attack (costs 50 points, lasts 30 minutes)"""
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+
+        # Check cooldown (30 minutes)
+        if user_id in self.dodge_cooldowns:
+            time_passed = (now - self.dodge_cooldowns[user_id]).total_seconds()
+            if time_passed < 1800:  # 30 minutes
+                remaining_mins = int((1800 - time_passed) / 60)
+                remaining_secs = int((1800 - time_passed) % 60)
                 await inter.response.send_message(
-                    f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
+                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using dodge again.",
+                    ephemeral=True,
                 )
+                return
+
+        # Check if already has active dodge
+        if user_id in self.active_dodges:
+            dodge_time = self.active_dodges[user_id]
+            if (now - dodge_time).total_seconds() < 300:  # 5 minutes
+                remaining_secs = int(300 - (now - dodge_time).total_seconds())
+                remaining_mins = remaining_secs // 60
+                remaining_secs = remaining_secs % 60
+                await inter.response.send_message(
+                    f"🛡️ You already have an active dodge! ({remaining_mins}m {remaining_secs}s remaining)",
+                    ephemeral=True,
+                )
+                return
+
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < 50:
+                await inter.response.send_message(
+                    f"You need at least 50 {Config.POINT_NAME} to activate dodge.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct 50 points
+            await conn.execute(
+                "UPDATE users SET points = points - 50 WHERE user_id = $1",
+                inter.author.id,
+            )
+
+        # Activate dodge
+        self.active_dodges[user_id] = now
+        self.dodge_cooldowns[user_id] = now
+
+        await inter.response.send_message(
+            f"🛡️ **Dodge activated!** (-50 {Config.POINT_NAME}) The next attack against you within 5 minutes will automatically fail!",
+            ephemeral=True,
+        )
 
     async def get_shop_roles(self):
         """Get role prices from database"""
