@@ -673,15 +673,15 @@ class Points(commands.Cog):
 
                 if result_type == "bad_luck":
                     await channel.send(
-                        f"💸 {user_mention} claimed the airdrop but got **nothing** (bad luck)! [{airdrop['count']}/10]"
+                        f"💸 {user_mention} claimed the airdrop but got **nothing** (bad luck)! [{airdrop['count']}/5]"
                     )
                 elif result_type == "crit":
                     await channel.send(
-                        f"💸✨ {user_mention} claimed the airdrop with **CRIT** and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/10]"
+                        f"💸✨ {user_mention} claimed the airdrop with **CRIT** and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/5]"
                     )
                 else:
                     await channel.send(
-                        f"💸 {user_mention} claimed the airdrop and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/10]"
+                        f"💸 {user_mention} claimed the airdrop and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/5]"
                     )
 
                 # Update embed footer if airdrop is full
