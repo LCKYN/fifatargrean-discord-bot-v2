@@ -52,6 +52,17 @@ class Points(commands.Cog):
                     message.author.id,
                 )
 
+            # Check if user has server booster role for 2x points
+            if message.guild:
+                booster_role = message.guild.get_role(939954575216107540)
+                if booster_role and booster_role in message.author.roles:
+                    # Give bonus points (same amount again for 2x total)
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        points_to_add,
+                        message.author.id,
+                    )
+
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
@@ -61,6 +72,21 @@ class Points(commands.Cog):
             points = points if points else 0
             await inter.response.send_message(
                 f"You have {points} {Config.POINT_NAME}.", ephemeral=True
+            )
+
+    @commands.slash_command(description="Check points for a specific user")
+    async def checkpoints(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        user: disnake.User = commands.Param(description="User to check points for"),
+    ):
+        async with db.pool.acquire() as conn:
+            points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", user.id
+            )
+            points = points if points else 0
+            await inter.response.send_message(
+                f"{user.mention} has {points} {Config.POINT_NAME}.", ephemeral=True
             )
 
     async def get_shop_roles(self):
