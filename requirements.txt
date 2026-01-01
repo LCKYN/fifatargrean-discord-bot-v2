@@ -1,3 +1,5 @@
 disnake
 asyncpg
 python-dotenv
+aiohttp
+pytz

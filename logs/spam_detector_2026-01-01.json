@@ -1,0 +1,254 @@
+[
+  {
+    "timestamp": "2026-01-01T00:17:26.805108",
+    "event": "link_detected",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:17:28.193928",
+    "event": "link_detected",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_id": 1456073916148875295,
+      "channel_name": "2",
+      "unique_channels": 2,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:17:29.572424",
+    "event": "link_detected",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:17:31.179701",
+    "event": "link_detected",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_id": 1456073937262874624,
+      "channel_name": "4",
+      "unique_channels": 0,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:17:31.204294",
+    "event": "spam_detected",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_count": 4
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:17:34.908517",
+    "event": "user_banned",
+    "data": {
+      "user_id": 848687512855773205,
+      "user_name": "drsaturday",
+      "channel_id": 1456073937262874624,
+      "channel_name": "4"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:38.874459",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:39.643819",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:40.734553",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:42.293071",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:43.734483",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073900382224517,
+      "channel_name": "1",
+      "unique_channels": 1,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:45.877114",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073916148875295,
+      "channel_name": "2",
+      "unique_channels": 2,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:47.192053",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073916148875295,
+      "channel_name": "2",
+      "unique_channels": 2,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:48.343314",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073916148875295,
+      "channel_name": "2",
+      "unique_channels": 2,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:51.029761",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:18:52.666359",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "https://www.sooplive.com/video/195654"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:03.023698",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "http://www.google.com"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:03.979714",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "http://www.google.com"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:05.251468",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073928010236018,
+      "channel_name": "3",
+      "unique_channels": 3,
+      "content_preview": "http://www.google.com"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:09.102744",
+    "event": "link_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_id": 1456073937262874624,
+      "channel_name": "4",
+      "unique_channels": 0,
+      "content_preview": "http://www.google.com"
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:09.107732",
+    "event": "spam_detected",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn",
+      "channel_count": 4
+    }
+  },
+  {
+    "timestamp": "2026-01-01T00:19:09.122371",
+    "event": "mod_test_triggered",
+    "data": {
+      "user_id": 341560715615797251,
+      "user_name": "lckyn"
+    }
+  }
+]

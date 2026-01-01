@@ -5,6 +5,7 @@ from disnake.ext import commands
 
 from core.config import Config
 from core.database import db
+from core.logger import cleanup_old_logs
 
 intents = disnake.Intents.default()
 intents.message_content = True
@@ -22,6 +23,10 @@ async def on_ready():
     print(f"Slash commands synced: {len(bot.slash_commands)}")
     await db.connect()
     print("Database connected")
+    
+    # Cleanup old log files (keep 30 days)
+    cleanup_old_logs()
+    print("Log cleanup completed")
 
 
 @bot.event
@@ -30,9 +35,9 @@ async def on_close():
     print("Database connection closed")
 
 
-# Load Cogs
+# Load Cogs (skip disabled cogs ending with _disabled.py)
 for filename in os.listdir("./cogs"):
-    if filename.endswith(".py") and filename != "__init__.py":
+    if filename.endswith(".py") and not filename.endswith("_disabled.py") and filename != "__init__.py":
         bot.load_extension(f"cogs.{filename[:-3]}")
 
 if __name__ == "__main__":

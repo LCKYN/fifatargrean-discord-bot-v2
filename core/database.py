@@ -103,16 +103,6 @@ class Database:
                         ALTER TABLE prediction_bets ADD PRIMARY KEY (prediction_id, user_id, choice_number);
                     """)
 
-            # Sync initial role prices from ENV if table is empty
-            count = await conn.fetchval("SELECT COUNT(*) FROM shop_roles")
-            if count == 0 and Config.ROLE_PRICES:
-                for role_id, price in Config.ROLE_PRICES.items():
-                    await conn.execute(
-                        "INSERT INTO shop_roles (role_id, price) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                        role_id,
-                        price,
-                    )
-
     async def close(self):
         await self.pool.close()
 

@@ -21,18 +21,15 @@ class Config:
         os.getenv("ROLE_DURATION_MINUTES", 1440)
     )  # Default 24 hours
 
-    # Parse role prices: {role_id: price}
-    ROLE_PRICES = {}
-    for item in os.getenv("ROLE_PRICES", "").split(","):
-        if ":" in item:
-            role_id, price = item.split(":")
-            ROLE_PRICES[int(role_id)] = int(price)
-
     # Points System
     BASE_POINTS = 10
     DIMINISHING_FACTOR = 0.8
     COOLDOWN_SECONDS = 15
     PREDICTION_COST = int(os.getenv("PREDICTION_COST", 100))
+
+    # SOOP Notification (disabled by default)
+    SOOP_CLIENT_ID = os.getenv("SOOP_CLIENT_ID", "")
+    NOTIFICATION_CHANNEL_ID = int(os.getenv("NOTIFICATION_CHANNEL_ID", 0))
 
     # Role IDs (Replace with actual IDs)
     ROLE_MEMBER = 123456789012345678

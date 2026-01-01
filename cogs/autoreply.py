@@ -243,7 +243,6 @@ class AutoReply(commands.Cog):
         is_mod = mod_role and mod_role in inter.author.roles
         is_admin = inter.author.guild_permissions.administrator
 
-        # Only mod/admin or the creator can stop
         key = (channel.id, user.id)
         if key not in self.active_replies:
             await inter.response.send_message(
@@ -253,18 +252,63 @@ class AutoReply(commands.Cog):
             return
 
         _, _, creator_id = self.active_replies[key]
+
+        # Mods/admins can stop for free
+        # Creator can stop for free
+        # Anyone else pays 1.5x cost
+        stop_cost = 0
         if not is_mod and not is_admin and inter.author.id != creator_id:
-            await inter.response.send_message(
-                "Only mods or the creator can stop this auto-reply.", ephemeral=True
-            )
-            return
+            # Get base cost and calculate 1.5x
+            async with db.pool.acquire() as conn:
+                cost_row = await conn.fetchval(
+                    "SELECT value FROM bot_settings WHERE key = 'autoreply_cost'"
+                )
+                base_cost = int(cost_row) if cost_row else DEFAULT_AUTOREPLY_COST
+                stop_cost = int(base_cost * 1.5)
+
+                user_points = await conn.fetchval(
+                    "SELECT points FROM users WHERE user_id = $1", inter.author.id
+                )
+                user_points = user_points or 0
+
+                if user_points < stop_cost:
+                    await inter.response.send_message(
+                        f"Not enough {Config.POINT_NAME}. Stopping someone else's auto-reply costs {stop_cost} (1.5x). You have: {user_points}",
+                        ephemeral=True,
+                    )
+                    return
+
+                # Deduct cost
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    stop_cost,
+                    inter.author.id,
+                )
 
         del self.active_replies[key]
 
+        cost_text = f" (Cost: {stop_cost} {Config.POINT_NAME})" if stop_cost > 0 else ""
         await inter.response.send_message(
-            f"✅ Auto-reply stopped for {user.mention} in {channel.mention}.",
+            f"✅ Auto-reply stopped for {user.mention} in {channel.mention}.{cost_text}",
             ephemeral=True,
         )
+
+        # Notify bot channel
+        bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+        if bot_channel:
+            embed = disnake.Embed(
+                title="🛑 Auto-Reply Stopped", color=disnake.Color.orange()
+            )
+            embed.add_field(name="📍 Channel", value=channel.mention, inline=True)
+            embed.add_field(name="👤 Target", value=user.mention, inline=True)
+            if stop_cost > 0:
+                embed.add_field(
+                    name="💰 Cost",
+                    value=f"{stop_cost} {Config.POINT_NAME}",
+                    inline=True,
+                )
+            embed.set_footer(text=f"Stopped by {inter.author.display_name}")
+            await bot_channel.send(embed=embed)
 
     @commands.slash_command(description="Show active auto-replies")
     async def autoreplylist(self, inter: disnake.ApplicationCommandInteraction):
