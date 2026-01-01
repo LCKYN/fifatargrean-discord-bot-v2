@@ -157,21 +157,21 @@ class Points(commands.Cog):
             trigger_text, creator_id = triggered_trap
 
             async with db.pool.acquire() as conn:
-                # Check if victim has at least 10 points
+                # Check if victim has at least 50 points
                 victim_points = await conn.fetchval(
                     "SELECT points FROM users WHERE user_id = $1", message.author.id
                 )
                 victim_points = victim_points or 0
 
-                if victim_points >= 10:
-                    # Steal 10 points from victim and give to trap creator
+                if victim_points >= 50:
+                    # Steal 50 points from victim and give to trap creator
                     await conn.execute(
-                        "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                        "UPDATE users SET points = points - 50 WHERE user_id = $1",
                         message.author.id,
                     )
                     await conn.execute(
-                        """INSERT INTO users (user_id, points) VALUES ($1, 10)
-                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 10""",
+                        """INSERT INTO users (user_id, points) VALUES ($1, 50)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 50""",
                         creator_id,
                     )
 
@@ -186,7 +186,7 @@ class Points(commands.Cog):
                         creator.display_name if creator else f"User {creator_id}"
                     )
                     await message.reply(
-                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 10 {Config.POINT_NAME}!"
+                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 50 {Config.POINT_NAME}!"
                     )
 
     @commands.slash_command(description="Set a trap with a trigger word")
@@ -216,16 +216,16 @@ class Points(commands.Cog):
 
         trigger_lower = trigger.lower()
 
-        # Check if user has at least 10 points to set a trap
+        # Check if user has at least 50 points to set a trap
         async with db.pool.acquire() as conn:
             user_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", inter.author.id
             )
             user_points = user_points or 0
 
-            if user_points < 10:
+            if user_points < 50:
                 await inter.response.send_message(
-                    f"You need at least 10 {Config.POINT_NAME} to set a trap.",
+                    f"You need at least 50 {Config.POINT_NAME} to set a trap.",
                     ephemeral=True,
                 )
                 return
@@ -254,7 +254,7 @@ class Points(commands.Cog):
         self.trap_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 10 {Config.POINT_NAME} to you!',
+            f'💣 Trap set! Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 50 {Config.POINT_NAME} to you!',
             ephemeral=True,
         )
 
@@ -289,6 +289,9 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         target: disnake.User = commands.Param(description="User to attack"),
+        amount: int = commands.Param(
+            description="Points to risk (50-250)", ge=50, le=250, default=50
+        ),
     ):
         # Check cooldown (20 seconds)
         now = datetime.datetime.now()
@@ -327,26 +330,28 @@ class Points(commands.Cog):
                     )
                     attacker_points = attacker_points or 0
 
-                    if attacker_points < 10:
+                    if attacker_points < amount:
                         await inter.response.send_message(
-                            f"You need at least 10 {Config.POINT_NAME} to attack.",
+                            f"You need at least {amount} {Config.POINT_NAME} to attack.",
                             ephemeral=True,
                         )
                         return
 
                     # Attacker automatically loses against mod
                     await conn.execute(
-                        "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                        "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                        amount,
                         inter.author.id,
                     )
                     await conn.execute(
-                        "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        amount,
                         target.id,
                     )
                     # Update cooldown
                     self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
-                        f"⚖️ **It's impossible to win against the Lawmaker!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
+                        f"⚖️ **It's impossible to win against the Lawmaker!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                     )
                 return
 
@@ -362,53 +367,58 @@ class Points(commands.Cog):
             attacker_points = attacker_points or 0
             target_points = target_points or 0
 
-            # Check both have at least 10 points
-            if attacker_points < 10:
+            # Check both have at least the attack amount
+            if attacker_points < amount:
                 await inter.response.send_message(
-                    f"You need at least 10 {Config.POINT_NAME} to attack.",
+                    f"You need at least {amount} {Config.POINT_NAME} to attack.",
                     ephemeral=True,
                 )
                 return
 
-            if target_points < 10:
+            if target_points < amount:
                 await inter.response.send_message(
-                    f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack.",
+                    f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
                     ephemeral=True,
                 )
                 return
 
-            # 45% success, 55% fail
-            success = random.random() < 0.45
+            # 45% success normally, 35% if attacking with more than 100 points
+            win_chance = 0.35 if amount > 100 else 0.45
+            success = random.random() < win_chance
 
             if success:
-                # Attacker steals 10 points from target
+                # Attacker steals points from target
                 await conn.execute(
-                    "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
                     inter.author.id,
                 )
                 await conn.execute(
-                    "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
                     target.id,
                 )
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
-                    f"💥 **Attack successful!** You stole 10 {Config.POINT_NAME} from {target.mention}!"
+                    f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
                 )
             else:
-                # Attacker loses 10 points to target
+                # Attacker loses points to target
                 await conn.execute(
-                    "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
                     inter.author.id,
                 )
                 await conn.execute(
-                    "UPDATE users SET points = points + 10 WHERE user_id = $1",
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
                     target.id,
                 )
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
-                    f"💔 **Attack failed!** You lost 10 {Config.POINT_NAME} to {target.mention}!"
+                    f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                 )
 
     async def get_shop_roles(self):
