@@ -116,7 +116,7 @@ class Points(commands.Cog):
     async def leaderboard(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT user_id, points FROM users ORDER BY points DESC LIMIT 10"
+                "SELECT user_id, points FROM users ORDER BY points DESC"
             )
 
             embed = disnake.Embed(
@@ -124,13 +124,29 @@ class Points(commands.Cog):
             )
             description = ""
 
-            for idx, row in enumerate(rows, 1):
+            # Get mod role
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+
+            # Filter out mods and build leaderboard
+            count = 0
+            for row in rows:
+                if count >= 10:
+                    break
+
                 user_id = row["user_id"]
                 points = row["points"]
-                # Try to get member object to show name, fallback to ID
+
+                # Get member object
                 member = inter.guild.get_member(user_id)
+
+                # Skip if user has mod role
+                if member and mod_role and mod_role in member.roles:
+                    continue
+
+                # Add to leaderboard
                 name = member.display_name if member else f"User {user_id}"
-                description += f"**{idx}.** {name} - `{points} {Config.POINT_NAME}`\n"
+                count += 1
+                description += f"**{count}.** {name} - `{points} {Config.POINT_NAME}`\n"
 
             embed.description = description or "No data yet."
 
