@@ -720,12 +720,15 @@ class Predictions(commands.Cog):
 
             # Distribute winnings (10% tax)
             payouts = []
+            total_tax = 0
             if winner_pool > 0 and total_pool > 0:
                 for bet in winner_bets:
                     share = bet["amount"] / winner_pool
                     raw_winnings = int(share * total_pool)
                     # Apply 10% tax: floor the received amount
                     winnings = int(raw_winnings * 0.90)
+                    tax = raw_winnings - winnings
+                    total_tax += tax
 
                     await conn.execute(
                         "UPDATE users SET points = points + $1 WHERE user_id = $2",
@@ -733,6 +736,21 @@ class Predictions(commands.Cog):
                         bet["user_id"],
                     )
                     payouts.append((bet["user_id"], winnings))
+
+            # Give 50% of tax to non-mod creator
+            creator_member = inter.guild.get_member(pred["creator_id"])
+            creator_is_mod = (
+                mod_role and creator_member and mod_role in creator_member.roles
+            )
+
+            if not creator_is_mod and total_tax > 0:
+                creator_bonus = int(total_tax * 0.50)
+                if creator_bonus > 0:
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        creator_bonus,
+                        pred["creator_id"],
+                    )
 
             # Update prediction status
             await conn.execute(
