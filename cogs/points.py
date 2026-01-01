@@ -363,6 +363,42 @@ class Points(commands.Cog):
                     )
                 return
 
+        # Check if attacker is a mod - mods always win
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            attacker_member = inter.guild.get_member(inter.author.id)
+            if mod_role and attacker_member and mod_role in attacker_member.roles:
+                async with db.pool.acquire() as conn:
+                    target_points = await conn.fetchval(
+                        "SELECT points FROM users WHERE user_id = $1", target.id
+                    )
+                    target_points = target_points or 0
+
+                    if target_points < amount:
+                        await inter.response.send_message(
+                            f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
+                            ephemeral=True,
+                        )
+                        return
+
+                    # Mod always wins
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        amount,
+                        inter.author.id,
+                    )
+                    await conn.execute(
+                        "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                        amount,
+                        target.id,
+                    )
+                    # Update cooldown
+                    self.attack_cooldowns[user_id] = now
+                    await inter.response.send_message(
+                        f"💥 **I am inevitable.** You took {amount} {Config.POINT_NAME} from {target.mention}!"
+                    )
+                return
+
         async with db.pool.acquire() as conn:
             # Get both users' points
             attacker_points = await conn.fetchval(
