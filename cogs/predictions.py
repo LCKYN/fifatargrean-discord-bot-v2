@@ -15,9 +15,11 @@ class BetModal(disnake.ui.Modal):
     def __init__(self, prediction_id: int, choice_number: int, choice_text: str):
         self.prediction_id = prediction_id
         self.choice_number = choice_number
+        # Label must be max 45 chars, "Bet for: " is 9 chars, so choice_text max 36
+        truncated_choice = choice_text[:36] if len(choice_text) > 36 else choice_text
         components = [
             disnake.ui.TextInput(
-                label=f"Bet amount for: {choice_text[:40]}",
+                label=f"Bet for: {truncated_choice}",
                 placeholder="Enter amount of points to bet",
                 custom_id="bet_amount",
                 style=disnake.TextInputStyle.short,
@@ -570,7 +572,7 @@ class Predictions(commands.Cog):
             description="Duration in minutes (1-150)", ge=1, le=150
         ),
         choices: int = commands.Param(
-            description="Number of choices (2-5)", ge=2, le=5, default=2
+            description="Number of choices (2-4)", ge=2, le=4, default=2
         ),
         max_bet: Optional[int] = commands.Param(
             description="Maximum bet amount per user (optional)", default=None, ge=1
