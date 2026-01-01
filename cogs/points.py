@@ -194,7 +194,9 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         trigger: str = commands.Param(
-            description="Text that will trigger the trap", max_length=50
+            description="Text that will trigger the trap (min 3 chars)",
+            min_length=3,
+            max_length=50,
         ),
     ):
         """Set a trap that steals 10 points from whoever types the trigger text"""
