@@ -44,7 +44,7 @@ class BetModal(disnake.ui.Modal):
         async with db.pool.acquire() as conn:
             # Check prediction status
             pred = await conn.fetchrow(
-                "SELECT status, ends_at, creator_id FROM predictions WHERE id = $1",
+                "SELECT status, ends_at, creator_id, max_bet FROM predictions WHERE id = $1",
                 self.prediction_id,
             )
             if not pred or pred["status"] != "betting":
@@ -67,6 +67,34 @@ class BetModal(disnake.ui.Modal):
                         "You cannot bet on your own prediction.", ephemeral=True
                     )
                     return
+
+            # Check maximum bet limit if set (mods can bypass)
+            if pred["max_bet"] is not None:
+                mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+                is_mod = mod_role and mod_role in inter.author.roles
+
+                if not is_mod:
+                    existing = await conn.fetchrow(
+                        "SELECT amount FROM prediction_bets WHERE prediction_id = $1 AND user_id = $2 AND choice_number = $3",
+                        self.prediction_id,
+                        inter.author.id,
+                        self.choice_number,
+                    )
+                    existing_amount = existing["amount"] if existing else 0
+
+                    if existing_amount + amount > pred["max_bet"]:
+                        remaining = pred["max_bet"] - existing_amount
+                        if remaining <= 0:
+                            await inter.response.send_message(
+                                f"You've already reached the maximum bet of {pred['max_bet']} {Config.POINT_NAME} on this choice.",
+                                ephemeral=True,
+                            )
+                        else:
+                            await inter.response.send_message(
+                                f"Maximum bet is {pred['max_bet']} {Config.POINT_NAME}. You can bet up to {remaining} more on this choice.",
+                                ephemeral=True,
+                            )
+                        return
 
             # Check if user already bet on THIS choice (can add more)
             existing = await conn.fetchrow(
@@ -143,9 +171,10 @@ class PredictionView(disnake.ui.View):
 class CreatePredictionModal(disnake.ui.Modal):
     """Modal for creating a prediction"""
 
-    def __init__(self, num_choices: int, duration: int):
+    def __init__(self, num_choices: int, duration: int, max_bet: Optional[int] = None):
         self.num_choices = num_choices
         self.duration = duration
+        self.max_bet = max_bet
 
         components = [
             disnake.ui.TextInput(
@@ -247,12 +276,13 @@ class CreatePredictionModal(disnake.ui.Modal):
                 minutes=self.duration
             )
             pred_id = await conn.fetchval(
-                """INSERT INTO predictions (title, creator_id, status, ends_at, channel_id)
-                   VALUES ($1, $2, 'betting', $3, $4) RETURNING id""",
+                """INSERT INTO predictions (title, creator_id, status, ends_at, channel_id, max_bet)
+                   VALUES ($1, $2, 'betting', $3, $4, $5) RETURNING id""",
                 title,
                 inter.author.id,
                 ends_at,
                 inter.channel.id,
+                self.max_bet,
             )
 
             # Renumber choices sequentially
@@ -542,10 +572,13 @@ class Predictions(commands.Cog):
         choices: int = commands.Param(
             description="Number of choices (2-5)", ge=2, le=5, default=2
         ),
+        max_bet: Optional[int] = commands.Param(
+            description="Maximum bet amount per user (optional)", default=None, ge=1
+        ),
     ):
         """Start the prediction creation process"""
         # Show modal for title and choices
-        modal = CreatePredictionModal(choices, duration)
+        modal = CreatePredictionModal(choices, duration, max_bet)
         await inter.response.send_modal(modal)
 
     @commands.slash_command(description="Force end betting early on a prediction")

@@ -81,6 +81,7 @@ class Database:
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS ends_at TIMESTAMP;
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS message_id BIGINT;
                 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+                ALTER TABLE predictions ADD COLUMN IF NOT EXISTS max_bet INTEGER;
             """)
 
             # Migration: Update prediction_bets primary key to allow multiple choices per user
