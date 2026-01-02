@@ -277,13 +277,17 @@ class CreatePredictionModal(disnake.ui.Modal):
             ends_at = datetime.datetime.now() + datetime.timedelta(
                 minutes=self.duration
             )
+
+            # Use the prediction channel for storing (will create thread there)
+            prediction_channel_id = 1456199415264973006
+
             pred_id = await conn.fetchval(
                 """INSERT INTO predictions (title, creator_id, status, ends_at, channel_id, max_bet)
                    VALUES ($1, $2, 'betting', $3, $4, $5) RETURNING id""",
                 title,
                 inter.author.id,
                 ends_at,
-                inter.channel.id,
+                prediction_channel_id,
                 self.max_bet,
             )
 
@@ -299,20 +303,50 @@ class CreatePredictionModal(disnake.ui.Modal):
             # Update choices list with sequential numbering
             choices = [(idx, text) for idx, (_, text) in enumerate(choices, 1)]
 
-        # Build and send embed
+        # Build embed
         embed = build_prediction_embed(
             pred_id, title, choices, ends_at, inter.author, {}, {}
         )
         view = PredictionView(pred_id, choices, is_active=True)
 
-        await inter.response.send_message(embed=embed, view=view)
-        msg = await inter.original_message()
-
-        # Save message ID
-        async with db.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE predictions SET message_id = $1 WHERE id = $2", msg.id, pred_id
+        # Get the prediction channel and create a thread
+        prediction_channel = inter.guild.get_channel(1456199415264973006)
+        if prediction_channel:
+            # Create thread with prediction title
+            thread_name = f"🔮 Prediction #{pred_id}: {title[:80]}"  # Max 100 chars
+            thread = await prediction_channel.create_thread(
+                name=thread_name,
+                auto_archive_duration=1440,  # 24 hours
+                type=disnake.ChannelType.public_thread,
             )
+
+            # Send prediction in the thread
+            msg = await thread.send(embed=embed, view=view)
+
+            # Save message ID and thread ID
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE predictions SET message_id = $1 WHERE id = $2",
+                    msg.id,
+                    pred_id,
+                )
+
+            # Respond to user
+            await inter.response.send_message(
+                f"✅ Prediction created in {thread.mention}!", ephemeral=True
+            )
+        else:
+            # Fallback: send in current channel if prediction channel not found
+            await inter.response.send_message(embed=embed, view=view)
+            msg = await inter.original_message()
+
+            # Save message ID
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE predictions SET message_id = $1 WHERE id = $2",
+                    msg.id,
+                    pred_id,
+                )
 
 
 def build_prediction_embed(
