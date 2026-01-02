@@ -20,6 +20,8 @@ class Points(commands.Cog):
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
         self.dodge_cooldowns = {}  # Track last dodge time per user
         self.active_dodges = {}  # {user_id: activated_at}
+        self.ceasefire_cooldowns = {}  # Track last ceasefire time per user
+        self.active_ceasefires = {}  # {user_id: activated_at}
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
 
     @commands.Cog.listener()
@@ -75,7 +77,7 @@ class Points(commands.Cog):
             now_bangkok = datetime.datetime.now(BANGKOK_TZ)
             today_bangkok = now_bangkok.date()
 
-            points_to_add = 5
+            points_to_add = 10
             is_first_of_day = False
 
             if not user:
@@ -114,7 +116,7 @@ class Points(commands.Cog):
 
                 # Check if first message of the day (Bangkok time)
                 if last_msg is None:
-                    points_to_add = 20
+                    points_to_add = 100
                     is_first_of_day = True
                     daily_earned = 0
                 else:
@@ -127,14 +129,14 @@ class Points(commands.Cog):
                         last_msg_bangkok = last_msg.astimezone(BANGKOK_TZ)
 
                     if last_msg_bangkok.date() < today_bangkok:
-                        points_to_add = 20
+                        points_to_add = 100
                         is_first_of_day = True
                         daily_earned = 0  # Reset daily earned for new day
                     else:
                         # Regular message, check cooldown (15 seconds)
                         if (now - last_msg.replace(tzinfo=None)).total_seconds() < 15:
                             return
-                        points_to_add = 5
+                        points_to_add = 10
 
                 # Check daily cap (400 points per day from chatting)
                 if daily_earned >= 400:
@@ -197,10 +199,10 @@ class Points(commands.Cog):
         triggered_trap = None
         now = datetime.datetime.now()
 
-        # Clean up expired traps (2 minutes)
+        # Clean up expired traps (15 minutes)
         expired_traps = []
         for trigger_text, (creator_id, created_at) in list(channel_traps.items()):
-            if (now - created_at).total_seconds() > 120:  # 2 minutes
+            if (now - created_at).total_seconds() > 900:  # 15 minutes
                 expired_traps.append(trigger_text)
 
         for trigger_text in expired_traps:
@@ -265,16 +267,18 @@ class Points(commands.Cog):
         ),
     ):
         """Set a trap that steals 50 points from whoever types the trigger text (costs 10 points)"""
-        # Check cooldown (1 minute)
+        # Check cooldown (30 minutes)
         now = datetime.datetime.now()
         user_id = inter.author.id
 
         if user_id in self.trap_cooldowns:
             time_passed = (now - self.trap_cooldowns[user_id]).total_seconds()
-            if time_passed < 60:
-                remaining = 60 - int(time_passed)
+            if time_passed < 1800:
+                remaining = 1800 - int(time_passed)
+                minutes = remaining // 60
+                seconds = remaining % 60
                 await inter.response.send_message(
-                    f"⏰ You need to wait {remaining} more seconds before setting another trap.",
+                    f"⏰ You need to wait {minutes} minutes and {seconds} seconds before setting another trap.",
                     ephemeral=True,
                 )
                 return
@@ -325,7 +329,7 @@ class Points(commands.Cog):
         self.trap_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f'💣 Trap set! (-10 {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 2 minutes will lose 50 {Config.POINT_NAME} to you!',
+            f'💣 Trap set! (-10 {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 15 minutes will lose 50 {Config.POINT_NAME} to you!',
             ephemeral=True,
         )
 
@@ -725,6 +729,68 @@ class Points(commands.Cog):
 
         await inter.response.send_message(
             f"🛡️ **Dodge activated!** (-50 {Config.POINT_NAME}) The next attack against you within 5 minutes will automatically fail!",
+            ephemeral=True,
+        )
+
+    @commands.slash_command(description="Activate ceasefire to prevent all attacks")
+    async def ceasefire(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+    ):
+        """Activate ceasefire to be immune from attacks (costs 100 points, lasts 15 minutes)"""
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+
+        # Check cooldown (30 minutes)
+        if user_id in self.ceasefire_cooldowns:
+            time_passed = (now - self.ceasefire_cooldowns[user_id]).total_seconds()
+            if time_passed < 1800:  # 30 minutes
+                remaining_mins = int((1800 - time_passed) / 60)
+                remaining_secs = int((1800 - time_passed) % 60)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using ceasefire again.",
+                    ephemeral=True,
+                )
+                return
+
+        # Check if already has active ceasefire
+        if user_id in self.active_ceasefires:
+            ceasefire_time = self.active_ceasefires[user_id]
+            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                remaining_secs = int(900 - (now - ceasefire_time).total_seconds())
+                remaining_mins = remaining_secs // 60
+                remaining_secs = remaining_secs % 60
+                await inter.response.send_message(
+                    f"☮️ You already have an active ceasefire! ({remaining_mins}m {remaining_secs}s remaining)",
+                    ephemeral=True,
+                )
+                return
+
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < 100:
+                await inter.response.send_message(
+                    f"You need at least 100 {Config.POINT_NAME} to activate ceasefire.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct 100 points
+            await conn.execute(
+                "UPDATE users SET points = points - 100 WHERE user_id = $1",
+                inter.author.id,
+            )
+
+        # Activate ceasefire
+        self.active_ceasefires[user_id] = now
+        self.ceasefire_cooldowns[user_id] = now
+
+        await inter.response.send_message(
+            f"☮️ **Ceasefire activated!** (-100 {Config.POINT_NAME}) You are immune from all attacks for 15 minutes!",
             ephemeral=True,
         )
 
@@ -1544,6 +1610,37 @@ class Points(commands.Cog):
                     value="\n".join(role_texts),
                     inline=False,
                 )
+
+        # Active effects (dodge, ceasefire)
+        active_effects = []
+        now = datetime.datetime.now()
+
+        # Check dodge
+        if target.id in self.active_dodges:
+            dodge_time = self.active_dodges[target.id]
+            if (now - dodge_time).total_seconds() < 300:  # 5 minutes
+                remaining_secs = int(300 - (now - dodge_time).total_seconds())
+                remaining_mins = remaining_secs // 60
+                remaining_secs = remaining_secs % 60
+                active_effects.append(f"🛡️ Dodge: {remaining_mins}m {remaining_secs}s")
+
+        # Check ceasefire
+        if target.id in self.active_ceasefires:
+            ceasefire_time = self.active_ceasefires[target.id]
+            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                remaining_secs = int(900 - (now - ceasefire_time).total_seconds())
+                remaining_mins = remaining_secs // 60
+                remaining_secs = remaining_secs % 60
+                active_effects.append(
+                    f"☮️ Ceasefire: {remaining_mins}m {remaining_secs}s"
+                )
+
+        if active_effects:
+            embed.add_field(
+                name="🛡️ Active Effects",
+                value="\n".join(active_effects),
+                inline=False,
+            )
 
         # Server join date
         if target.joined_at:

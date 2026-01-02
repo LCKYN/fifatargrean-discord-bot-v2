@@ -273,12 +273,12 @@ class CreatePredictionModal(disnake.ui.Modal):
                 )
                 return
 
-            # Create prediction
+            # Create prediction (will update channel_id to thread ID after creation)
             ends_at = datetime.datetime.now() + datetime.timedelta(
                 minutes=self.duration
             )
 
-            # Use the prediction channel for storing (will create thread there)
+            # Temporarily use parent channel, will update to thread ID
             prediction_channel_id = 1456199415264973006
 
             pred_id = await conn.fetchval(
@@ -323,11 +323,12 @@ class CreatePredictionModal(disnake.ui.Modal):
             # Send prediction in the thread
             msg = await thread.send(embed=embed, view=view)
 
-            # Save message ID and thread ID
+            # Save message ID and thread ID (important: thread.id not parent channel)
             async with db.pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE predictions SET message_id = $1 WHERE id = $2",
+                    "UPDATE predictions SET message_id = $1, channel_id = $2 WHERE id = $3",
                     msg.id,
+                    thread.id,  # Store thread ID, not parent channel ID
                     pred_id,
                 )
 
@@ -701,15 +702,20 @@ class Predictions(commands.Cog):
         winner: int = commands.Param(description="Winning choice number"),
     ):
         """Set the winner of a prediction"""
+        # Defer response first, then unarchive if needed
+        await inter.response.defer(ephemeral=True)
+
+        # Unarchive thread if command is used in an archived thread
+        if isinstance(inter.channel, disnake.Thread) and inter.channel.archived:
+            await inter.channel.edit(archived=False)
+
         async with db.pool.acquire() as conn:
             pred = await conn.fetchrow(
                 "SELECT * FROM predictions WHERE id = $1", prediction_id
             )
 
             if not pred:
-                await inter.response.send_message(
-                    "Prediction not found.", ephemeral=True
-                )
+                await inter.followup.send("Prediction not found.", ephemeral=True)
                 return
 
             # Check permission (creator or mod)
@@ -718,14 +724,14 @@ class Predictions(commands.Cog):
             is_creator = pred["creator_id"] == inter.author.id
 
             if not is_mod and not is_creator:
-                await inter.response.send_message(
+                await inter.followup.send(
                     "Only the creator or a mod can resolve this prediction.",
                     ephemeral=True,
                 )
                 return
 
             if pred["status"] not in ("betting", "locked"):
-                await inter.response.send_message(
+                await inter.followup.send(
                     "This prediction has already been resolved or cancelled.",
                     ephemeral=True,
                 )
@@ -738,9 +744,7 @@ class Predictions(commands.Cog):
                 winner,
             )
             if not valid_choice:
-                await inter.response.send_message(
-                    "Invalid winning choice.", ephemeral=True
-                )
+                await inter.followup.send("Invalid winning choice.", ephemeral=True)
                 return
 
             # Get all bets
@@ -823,6 +827,10 @@ class Predictions(commands.Cog):
 
                 view = PredictionView(prediction_id, choices, is_active=False)
                 await msg.edit(embed=embed, view=view)
+
+                # Archive thread if message is in a thread
+                if isinstance(channel, disnake.Thread):
+                    await channel.edit(archived=True, locked=True)
         except Exception as e:
             print(f"Error updating resolved prediction: {e}")
 
@@ -868,7 +876,7 @@ class Predictions(commands.Cog):
             announce_embed.set_footer(text=f"Resolved by {inter.author.display_name}")
             await bot_channel.send(embed=announce_embed)
 
-        await inter.response.send_message(
+        await inter.followup.send(
             f"✅ Prediction #{prediction_id} resolved! Winner: Choice #{winner}\n"
             f"💰 Total pool: {total_pool:,} | Winners: {len(winner_bets)} | Distributed with 10% tax.",
             ephemeral=True,
@@ -1089,6 +1097,10 @@ class Predictions(commands.Cog):
 
                 view = PredictionView(prediction_id, choices, is_active=False)
                 await msg.edit(embed=embed, view=view)
+
+                # Archive thread if message is in a thread
+                if isinstance(channel, disnake.Thread):
+                    await channel.edit(archived=True, locked=True)
         except Exception as e:
             print(f"Error updating cancelled prediction: {e}")
 
