@@ -13,6 +13,9 @@ class Roles(commands.Cog):
         self.bot = bot
         self.check_temp_roles.start()
 
+    def cog_unload(self):
+        self.check_temp_roles.cancel()
+
     @tasks.loop(seconds=30)  # Check every 30 seconds for testing
     async def check_temp_roles(self):
         if db.pool is None:

@@ -79,8 +79,8 @@ class Points(commands.Cog):
             is_first_of_day = False
 
             if not user:
-                # First time user ever - give 20 points
-                points_to_add = 20
+                # First time user ever - give 1000 points welcome bonus
+                points_to_add = 1000
                 is_first_of_day = True
                 current_points = 0
                 daily_earned = 0
@@ -91,6 +91,15 @@ class Points(commands.Cog):
                     now,
                     today_bangkok,
                 )
+
+                # Send welcome message
+                channel = message.channel
+                embed = disnake.Embed(
+                    title="🎉 Welcome Bonus!",
+                    description=f"Welcome {message.author.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
+                    color=disnake.Color.green(),
+                )
+                await channel.send(embed=embed, delete_after=10)
             else:
                 last_msg = user["last_message_at"]
                 current_points = user["points"] or 0
@@ -1244,6 +1253,93 @@ class Points(commands.Cog):
             f"Role **{selected_role.name}** added to {target.display_name} for {Config.ROLE_DURATION_MINUTES} minute(s)!",
             ephemeral=True,
         )
+
+    @commands.slash_command(description="Check your or another user's profile")
+    async def profile(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        user: disnake.Member = None,
+    ):
+        """Check user profile with points and active roles"""
+        target = user or inter.author
+
+        async with db.pool.acquire() as conn:
+            # Get user points
+            user_data = await conn.fetchrow(
+                "SELECT points, total_sent, total_received FROM users WHERE user_id = $1",
+                target.id,
+            )
+
+            if not user_data:
+                points = 0
+                total_sent = 0
+                total_received = 0
+            else:
+                points = user_data["points"] or 0
+                total_sent = user_data["total_sent"] or 0
+                total_received = user_data["total_received"] or 0
+
+            # Get active temporary roles
+            temp_roles = await conn.fetch(
+                "SELECT role_id, expires_at FROM temp_roles WHERE user_id = $1",
+                target.id,
+            )
+
+        # Build embed
+        embed = disnake.Embed(
+            title=f"📋 Profile: {target.display_name}",
+            color=target.color
+            if target.color != disnake.Color.default()
+            else disnake.Color.blue(),
+        )
+
+        embed.set_thumbnail(url=target.display_avatar.url)
+
+        # Points info
+        embed.add_field(
+            name=f"💰 {Config.POINT_NAME}",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}",
+            inline=True,
+        )
+
+        # Active roles with time left
+        if temp_roles:
+            role_texts = []
+            now = datetime.datetime.now()
+            for role_record in temp_roles:
+                role = inter.guild.get_role(role_record["role_id"])
+                if role:
+                    expires_at = role_record["expires_at"]
+                    if expires_at.tzinfo is None:
+                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+                    time_left = expires_at - now.replace(tzinfo=timezone.utc)
+                    if time_left.total_seconds() > 0:
+                        hours = int(time_left.total_seconds() // 3600)
+                        minutes = int((time_left.total_seconds() % 3600) // 60)
+                        if hours > 0:
+                            time_str = f"{hours}h {minutes}m"
+                        else:
+                            time_str = f"{minutes}m"
+                        role_texts.append(f"{role.mention} - {time_str} left")
+
+            if role_texts:
+                embed.add_field(
+                    name="⏰ Active Roles",
+                    value="\n".join(role_texts),
+                    inline=False,
+                )
+
+        # Server join date
+        if target.joined_at:
+            embed.add_field(
+                name="📅 Joined Server",
+                value=f"<t:{int(target.joined_at.timestamp())}:R>",
+                inline=True,
+            )
+
+        embed.set_footer(text=f"User ID: {target.id}")
+        await inter.response.send_message(embed=embed)
 
 
 def setup(bot):
