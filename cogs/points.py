@@ -393,102 +393,24 @@ class Points(commands.Cog):
             await inter.response.send_message("You cannot attack bots.", ephemeral=True)
             return
 
-        # Check if target is a mod - mods always win
+        # Check if target is a mod - can't attack mods
         if inter.guild:
             mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
             target_member = inter.guild.get_member(target.id)
             if mod_role and target_member and mod_role in target_member.roles:
-                async with db.pool.acquire() as conn:
-                    attacker_points = await conn.fetchval(
-                        "SELECT points FROM users WHERE user_id = $1", inter.author.id
-                    )
-                    attacker_points = attacker_points or 0
-
-                    if attacker_points < amount:
-                        await inter.response.send_message(
-                            f"You need at least {amount} {Config.POINT_NAME} to attack.",
-                            ephemeral=True,
-                        )
-                        return
-
-                    # Attacker automatically loses against mod
-                    await conn.execute(
-                        "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                        amount,
-                        inter.author.id,
-                    )
-                    await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                        amount,
-                        target.id,
-                    )
-
-                    # Track attack stats
-                    if amount > 100:
-                        await conn.execute(
-                            "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
-                            inter.author.id,
-                        )
-                    else:
-                        await conn.execute(
-                            "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
-                            inter.author.id,
-                        )
-
-                    # Update cooldown
-                    self.attack_cooldowns[user_id] = now
-                    await inter.response.send_message(
-                        f"⚖️ **It's impossible to win against the Lawmaker!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
-                    )
+                await inter.response.send_message(
+                    "⚖️ You cannot attack moderators!", ephemeral=True
+                )
                 return
 
-        # Check if attacker is a mod - mods always win
+        # Check if attacker is a mod - mods can't attack
         if inter.guild:
             mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
             attacker_member = inter.guild.get_member(inter.author.id)
             if mod_role and attacker_member and mod_role in attacker_member.roles:
-                async with db.pool.acquire() as conn:
-                    target_points = await conn.fetchval(
-                        "SELECT points FROM users WHERE user_id = $1", target.id
-                    )
-                    target_points = target_points or 0
-
-                    if target_points < amount:
-                        await inter.response.send_message(
-                            f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
-                            ephemeral=True,
-                        )
-                        return
-
-                    # Mod always wins
-                    await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                        amount,
-                        inter.author.id,
-                    )
-                    await conn.execute(
-                        "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                        amount,
-                        target.id,
-                    )
-
-                    # Track attack stats
-                    if amount > 100:
-                        await conn.execute(
-                            "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
-                            inter.author.id,
-                        )
-                    else:
-                        await conn.execute(
-                            "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
-                            inter.author.id,
-                        )
-
-                    # Update cooldown
-                    self.attack_cooldowns[user_id] = now
-                    await inter.response.send_message(
-                        f"💥 **I am inevitable.** You took {amount} {Config.POINT_NAME} from {target.mention}!"
-                    )
+                await inter.response.send_message(
+                    "⚖️ Moderators cannot attack users!", ephemeral=True
+                )
                 return
 
         async with db.pool.acquire() as conn:
@@ -1129,6 +1051,58 @@ class Points(commands.Cog):
 
         await inter.response.send_message(
             f"Added {amount} {Config.POINT_NAME} to {user.display_name}", ephemeral=True
+        )
+
+    @commands.slash_command(description="[MOD] Remove points from a user")
+    async def removepoint(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        user: disnake.Member,
+        amount: int,
+    ):
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        if amount <= 0:
+            await inter.response.send_message(
+                "Amount must be positive.", ephemeral=True
+            )
+            return
+
+        async with db.pool.acquire() as conn:
+            # Check current points
+            current_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", user.id
+            )
+            current_points = current_points or 0
+
+            # Remove points (don't go below 0)
+            new_points = max(0, current_points - amount)
+            actual_removed = current_points - new_points
+
+            await conn.execute(
+                "UPDATE users SET points = $1 WHERE user_id = $2",
+                new_points,
+                user.id,
+            )
+
+        channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+        if channel:
+            embed = disnake.Embed(
+                title="💸 Points Removed",
+                description=f"{inter.author.mention} removed **{actual_removed} {Config.POINT_NAME}** from {user.mention}",
+                color=disnake.Color.red(),
+            )
+            await channel.send(embed=embed)
+
+        await inter.response.send_message(
+            f"Removed {actual_removed} {Config.POINT_NAME} from {user.display_name} ({current_points} → {new_points})",
+            ephemeral=True,
         )
 
     @commands.slash_command(description="Send points to another user (10% tax)")
