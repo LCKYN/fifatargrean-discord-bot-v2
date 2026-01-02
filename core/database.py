@@ -73,6 +73,10 @@ class Database:
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS total_received INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_earned INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_earned_date DATE;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS attack_attempts_low INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS attack_wins_low INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS attack_attempts_high INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS attack_wins_high INTEGER DEFAULT 0;
             """)
 
             # Migration: Add new prediction columns if they don't exist

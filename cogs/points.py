@@ -419,6 +419,19 @@ class Points(commands.Cog):
                         amount,
                         target.id,
                     )
+                    
+                    # Track attack stats
+                    if amount > 100:
+                        await conn.execute(
+                            "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
+                            inter.author.id,
+                        )
+                    else:
+                        await conn.execute(
+                            "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
+                            inter.author.id,
+                        )
+                    
                     # Update cooldown
                     self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
@@ -455,6 +468,19 @@ class Points(commands.Cog):
                         amount,
                         target.id,
                     )
+                    
+                    # Track attack stats
+                    if amount > 100:
+                        await conn.execute(
+                            "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
+                            inter.author.id,
+                        )
+                    else:
+                        await conn.execute(
+                            "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
+                            inter.author.id,
+                        )
+                    
                     # Update cooldown
                     self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
@@ -523,6 +549,19 @@ class Points(commands.Cog):
                     amount,
                     target.id,
                 )
+                
+                # Track attack stats (win)
+                if amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
@@ -540,6 +579,19 @@ class Points(commands.Cog):
                     amount,
                     target.id,
                 )
+                
+                # Track attack stats (loss)
+                if amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 if target_has_dodge:
@@ -1413,9 +1465,12 @@ class Points(commands.Cog):
         target = user or inter.author
 
         async with db.pool.acquire() as conn:
-            # Get user points
+            # Get user points and stats
             user_data = await conn.fetchrow(
-                "SELECT points, total_sent, total_received FROM users WHERE user_id = $1",
+                """SELECT points, total_sent, total_received, 
+                   attack_attempts_low, attack_wins_low, 
+                   attack_attempts_high, attack_wins_high 
+                   FROM users WHERE user_id = $1""",
                 target.id,
             )
 
@@ -1423,10 +1478,18 @@ class Points(commands.Cog):
                 points = 0
                 total_sent = 0
                 total_received = 0
+                attack_attempts_low = 0
+                attack_wins_low = 0
+                attack_attempts_high = 0
+                attack_wins_high = 0
             else:
                 points = user_data["points"] or 0
                 total_sent = user_data["total_sent"] or 0
                 total_received = user_data["total_received"] or 0
+                attack_attempts_low = user_data["attack_attempts_low"] or 0
+                attack_wins_low = user_data["attack_wins_low"] or 0
+                attack_attempts_high = user_data["attack_attempts_high"] or 0
+                attack_wins_high = user_data["attack_wins_high"] or 0
 
             # Get active temporary roles
             temp_roles = await conn.fetch(
@@ -1448,6 +1511,30 @@ class Points(commands.Cog):
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
             value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}",
+            inline=True,
+        )
+
+        # Attack stats
+        # Calculate winrates
+        winrate_low = (
+            (attack_wins_low / attack_attempts_low * 100)
+            if attack_attempts_low > 0
+            else 0
+        )
+        winrate_high = (
+            (attack_wins_high / attack_attempts_high * 100)
+            if attack_attempts_high > 0
+            else 0
+        )
+
+        attack_stats_text = (
+            f"**≤100 pts:** {attack_wins_low}/{attack_attempts_low} ({winrate_low:.1f}%)\n"
+            f"**>100 pts:** {attack_wins_high}/{attack_attempts_high} ({winrate_high:.1f}%)"
+        )
+
+        embed.add_field(
+            name="⚔️ Attack Stats",
+            value=attack_stats_text,
             inline=True,
         )
 
