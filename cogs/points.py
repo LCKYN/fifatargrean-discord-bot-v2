@@ -752,8 +752,14 @@ class Points(commands.Cog):
         )
 
     @commands.slash_command(description="Start an airdrop for users to claim points")
-    async def airdrop(self, inter: disnake.ApplicationCommandInteraction):
-        """Mod-only: Start an airdrop where first 10 users can claim 100 points"""
+    async def airdrop(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        amount: int = commands.Param(
+            description="Points to give (default 100)", default=100, ge=1, le=10000
+        ),
+    ):
+        """Mod-only: Start an airdrop where first 5 users can claim points"""
         # Check if user is a mod
         mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
         if not mod_role or mod_role not in inter.author.roles:
@@ -765,7 +771,7 @@ class Points(commands.Cog):
         # Send airdrop message
         embed = disnake.Embed(
             title="💸 AIRDROP!",
-            description=f"React with 💸 to claim **100 {Config.POINT_NAME}**!\n\n"
+            description=f"React with 💸 to claim **{amount} {Config.POINT_NAME}**!\n\n"
             f"• First **5** users only!\n"
             f"• < 500 {Config.POINT_NAME}: 50% chance for 2x\n"
             f"• > 1500 {Config.POINT_NAME}: 70% chance for nothing",
@@ -780,7 +786,11 @@ class Points(commands.Cog):
         await msg.add_reaction("💸")
 
         # Track this airdrop
-        self.active_airdrops[msg.id] = {"claimed_users": set(), "count": 0}
+        self.active_airdrops[msg.id] = {
+            "claimed_users": set(),
+            "count": 0,
+            "amount": amount,
+        }
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: disnake.RawReactionActionEvent):
@@ -818,7 +828,7 @@ class Points(commands.Cog):
             )
             user_points = user_points or 0
 
-            points_to_give = 100
+            points_to_give = airdrop["amount"]
             result_type = "normal"
 
             # Apply luck mechanics
