@@ -80,12 +80,13 @@ class Points(commands.Cog):
 
             if not user:
                 # First time user ever - give 1000 points welcome bonus
+                # This does NOT count towards daily earned cap
                 points_to_add = 1000
                 is_first_of_day = True
                 current_points = 0
-                daily_earned = 0
+                daily_earned = 0  # Start at 0, bonus doesn't count
                 await conn.execute(
-                    "INSERT INTO users (user_id, points, last_message_at, daily_earned, daily_earned_date) VALUES ($1, $2, $3, $2, $4)",
+                    "INSERT INTO users (user_id, points, last_message_at, daily_earned, daily_earned_date) VALUES ($1, $2, $3, 0, $4)",
                     message.author.id,
                     points_to_add,
                     now,
