@@ -551,6 +551,144 @@ class Points(commands.Cog):
                         f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                     )
 
+    @commands.slash_command(description="Test attack simulation (no points changed)")
+    async def test_attack(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        target: disnake.User = commands.Param(description="User to attack"),
+        amount: int = commands.Param(
+            description="Points to risk (50-250)", ge=50, le=250, default=50
+        ),
+    ):
+        """Simulate an attack without actually changing points"""
+        # Can't attack yourself
+        if target.id == inter.author.id:
+            await inter.response.send_message(
+                "You cannot attack yourself.", ephemeral=True
+            )
+            return
+
+        # Can't attack bots
+        if target.bot:
+            await inter.response.send_message("You cannot attack bots.", ephemeral=True)
+            return
+
+        # Check if target is a mod - mods always win
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            target_member = inter.guild.get_member(target.id)
+            if mod_role and target_member and mod_role in target_member.roles:
+                async with db.pool.acquire() as conn:
+                    attacker_points = await conn.fetchval(
+                        "SELECT points FROM users WHERE user_id = $1", inter.author.id
+                    )
+                    attacker_points = attacker_points or 0
+
+                    if attacker_points < amount:
+                        await inter.response.send_message(
+                            f"You need at least {amount} {Config.POINT_NAME} to attack.",
+                            ephemeral=True,
+                        )
+                        return
+
+                    # TEST MODE - No points changed
+                    await inter.response.send_message(
+                        f"🧪 **TEST:** ⚖️ It's impossible to win against the Lawmaker! You would lose {amount} {Config.POINT_NAME} to {target.mention}!",
+                        ephemeral=True,
+                    )
+                return
+
+        # Check if attacker is a mod - mods always win
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            attacker_member = inter.guild.get_member(inter.author.id)
+            if mod_role and attacker_member and mod_role in attacker_member.roles:
+                async with db.pool.acquire() as conn:
+                    target_points = await conn.fetchval(
+                        "SELECT points FROM users WHERE user_id = $1", target.id
+                    )
+                    target_points = target_points or 0
+
+                    if target_points < amount:
+                        await inter.response.send_message(
+                            f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
+                            ephemeral=True,
+                        )
+                        return
+
+                    # TEST MODE - No points changed
+                    await inter.response.send_message(
+                        f"🧪 **TEST:** 💥 I am inevitable. You would take {amount} {Config.POINT_NAME} from {target.mention}!",
+                        ephemeral=True,
+                    )
+                return
+
+        async with db.pool.acquire() as conn:
+            # Get both users' points
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            target_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", target.id
+            )
+
+            attacker_points = attacker_points or 0
+            target_points = target_points or 0
+
+            # Check both have at least the attack amount
+            if attacker_points < amount:
+                await inter.response.send_message(
+                    f"You need at least {amount} {Config.POINT_NAME} to attack.",
+                    ephemeral=True,
+                )
+                return
+
+            if target_points < amount:
+                await inter.response.send_message(
+                    f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
+                    ephemeral=True,
+                )
+                return
+
+            # Check if target has active dodge
+            target_has_dodge = False
+            if target.id in self.active_dodges:
+                dodge_time = self.active_dodges[target.id]
+                if (
+                    datetime.datetime.now() - dodge_time
+                ).total_seconds() < 300:  # 5 minutes
+                    target_has_dodge = True
+                    # Don't consume dodge in test mode
+                else:
+                    # Expired dodge, clean up
+                    del self.active_dodges[target.id]
+
+            if target_has_dodge:
+                # Dodge makes attacker always fail
+                success = False
+            else:
+                # 45% success normally, 35% if attacking with more than 100 points
+                win_chance = 0.35 if amount > 100 else 0.45
+                success = random.random() < win_chance
+
+            # TEST MODE - No points changed, no cooldown set
+            if success:
+                await inter.response.send_message(
+                    f"🧪 **TEST:** 💥 Attack would be successful! You would steal {amount} {Config.POINT_NAME} from {target.mention}!",
+                    ephemeral=True,
+                )
+            else:
+                if target_has_dodge:
+                    await inter.response.send_message(
+                        f"🧪 **TEST:** 🛡️ Attack would be dodged! {target.mention} would dodge your attack and you would lose {amount} {Config.POINT_NAME}!",
+                        ephemeral=True,
+                    )
+                else:
+                    await inter.response.send_message(
+                        f"🧪 **TEST:** 💔 Attack would fail! You would lose {amount} {Config.POINT_NAME} to {target.mention}!",
+                        ephemeral=True,
+                    )
+
     @commands.slash_command(description="Activate dodge to block the next attack")
     async def dodge(
         self,
