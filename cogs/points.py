@@ -419,7 +419,7 @@ class Points(commands.Cog):
                         amount,
                         target.id,
                     )
-                    
+
                     # Track attack stats
                     if amount > 100:
                         await conn.execute(
@@ -431,7 +431,7 @@ class Points(commands.Cog):
                             "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
                             inter.author.id,
                         )
-                    
+
                     # Update cooldown
                     self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
@@ -468,7 +468,7 @@ class Points(commands.Cog):
                         amount,
                         target.id,
                     )
-                    
+
                     # Track attack stats
                     if amount > 100:
                         await conn.execute(
@@ -480,7 +480,7 @@ class Points(commands.Cog):
                             "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
                             inter.author.id,
                         )
-                    
+
                     # Update cooldown
                     self.attack_cooldowns[user_id] = now
                     await inter.response.send_message(
@@ -549,7 +549,7 @@ class Points(commands.Cog):
                     amount,
                     target.id,
                 )
-                
+
                 # Track attack stats (win)
                 if amount > 100:
                     await conn.execute(
@@ -561,7 +561,7 @@ class Points(commands.Cog):
                         "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
                         inter.author.id,
                     )
-                
+
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 await inter.response.send_message(
@@ -579,7 +579,7 @@ class Points(commands.Cog):
                     amount,
                     target.id,
                 )
-                
+
                 # Track attack stats (loss)
                 if amount > 100:
                     await conn.execute(
@@ -591,7 +591,7 @@ class Points(commands.Cog):
                         "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
                         inter.author.id,
                     )
-                
+
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
                 if target_has_dodge:
@@ -1467,9 +1467,9 @@ class Points(commands.Cog):
         async with db.pool.acquire() as conn:
             # Get user points and stats
             user_data = await conn.fetchrow(
-                """SELECT points, total_sent, total_received, 
-                   attack_attempts_low, attack_wins_low, 
-                   attack_attempts_high, attack_wins_high 
+                """SELECT points, total_sent, total_received,
+                   attack_attempts_low, attack_wins_low,
+                   attack_attempts_high, attack_wins_high
                    FROM users WHERE user_id = $1""",
                 target.id,
             )
