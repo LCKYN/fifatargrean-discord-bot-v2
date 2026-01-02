@@ -332,12 +332,15 @@ class Points(commands.Cog):
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
-            points = await conn.fetchval(
-                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            user_data = await conn.fetchrow(
+                "SELECT points, daily_earned FROM users WHERE user_id = $1",
+                inter.author.id,
             )
-            points = points if points else 0
+            points = user_data["points"] if user_data else 0
+            daily_earned = user_data["daily_earned"] if user_data else 0
             await inter.response.send_message(
-                f"You have {points} {Config.POINT_NAME}.", ephemeral=True
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {daily_earned}/400 points earned",
+                ephemeral=True,
             )
 
     @commands.slash_command(description="Check points for a specific user")
@@ -1467,7 +1470,7 @@ class Points(commands.Cog):
         async with db.pool.acquire() as conn:
             # Get user points and stats
             user_data = await conn.fetchrow(
-                """SELECT points, total_sent, total_received,
+                """SELECT points, total_sent, total_received, daily_earned,
                    attack_attempts_low, attack_wins_low,
                    attack_attempts_high, attack_wins_high
                    FROM users WHERE user_id = $1""",
@@ -1478,6 +1481,7 @@ class Points(commands.Cog):
                 points = 0
                 total_sent = 0
                 total_received = 0
+                daily_earned = 0
                 attack_attempts_low = 0
                 attack_wins_low = 0
                 attack_attempts_high = 0
@@ -1486,6 +1490,7 @@ class Points(commands.Cog):
                 points = user_data["points"] or 0
                 total_sent = user_data["total_sent"] or 0
                 total_received = user_data["total_received"] or 0
+                daily_earned = user_data["daily_earned"] or 0
                 attack_attempts_low = user_data["attack_attempts_low"] or 0
                 attack_wins_low = user_data["attack_wins_low"] or 0
                 attack_attempts_high = user_data["attack_attempts_high"] or 0
@@ -1510,7 +1515,7 @@ class Points(commands.Cog):
         # Points info
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {daily_earned}/400",
             inline=True,
         )
 
