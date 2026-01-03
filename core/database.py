@@ -65,6 +65,26 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS guild_wars (
+                    id SERIAL PRIMARY KEY,
+                    creator_id BIGINT NOT NULL,
+                    war_name TEXT NOT NULL,
+                    team1_name TEXT NOT NULL,
+                    team2_name TEXT NOT NULL,
+                    entry_cost INTEGER NOT NULL,
+                    status TEXT DEFAULT 'recruiting',
+                    winning_team INTEGER,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    thread_id BIGINT,
+                    message_id BIGINT
+                );
+                CREATE TABLE IF NOT EXISTS guild_war_members (
+                    war_id INTEGER REFERENCES guild_wars(id) ON DELETE CASCADE,
+                    user_id BIGINT NOT NULL,
+                    team_number INTEGER NOT NULL,
+                    points_bet INTEGER NOT NULL,
+                    PRIMARY KEY (war_id, user_id)
+                );
             """)
 
             # Add new columns if they don't exist (migration for existing databases)

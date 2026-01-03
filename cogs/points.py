@@ -22,6 +22,7 @@ class Points(commands.Cog):
         self.active_dodges = {}  # {user_id: activated_at}
         self.ceasefire_cooldowns = {}  # Track last ceasefire time per user
         self.active_ceasefires = {}  # {user_id: activated_at}
+        self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
 
     @commands.Cog.listener()
@@ -417,6 +418,31 @@ class Points(commands.Cog):
                 )
                 return
 
+        # Check if attacker has active ceasefire - break it if so
+        attacker_broke_ceasefire = False
+        if user_id in self.active_ceasefires:
+            ceasefire_time = self.active_ceasefires[user_id]
+            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                # Remove ceasefire
+                del self.active_ceasefires[user_id]
+                attacker_broke_ceasefire = True
+
+                # Apply 10-minute debuff
+                self.ceasefire_breakers[user_id] = now
+
+                # Send notification to channel 1456204479203639340
+                notification_channel = self.bot.get_channel(1456204479203639340)
+                if notification_channel:
+                    embed = disnake.Embed(
+                        title="⚠️ Ceasefire Broken!",
+                        description=f"{inter.author.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
+                        color=disnake.Color.red(),
+                    )
+                    await notification_channel.send(embed=embed)
+            else:
+                # Expired ceasefire, clean up
+                del self.active_ceasefires[user_id]
+
         async with db.pool.acquire() as conn:
             # Get both users' points
             attacker_points = await conn.fetchval(
@@ -531,6 +557,212 @@ class Points(commands.Cog):
                     await inter.response.send_message(
                         f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                     )
+
+    @commands.slash_command(
+        description="Pierce attack - 100% success vs dodge, 100% fail otherwise"
+    )
+    async def pierce(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        target: disnake.User = commands.Param(description="User to attack"),
+        amount: int = commands.Param(
+            description="Points to risk (100-200)", ge=100, le=200, default=100
+        ),
+    ):
+        """Pierce attack - guaranteed success if target has dodge, guaranteed fail if not"""
+        # Check cooldown (20 seconds - same as regular attack)
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+
+        if user_id in self.attack_cooldowns:
+            time_passed = (now - self.attack_cooldowns[user_id]).total_seconds()
+            if time_passed < 20:
+                remaining = 20 - int(time_passed)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining} more seconds before attacking again.",
+                    ephemeral=True,
+                )
+                return
+
+        # Can't attack yourself
+        if target.id == inter.author.id:
+            await inter.response.send_message(
+                "You cannot attack yourself.", ephemeral=True
+            )
+            return
+
+        # Can't attack bots
+        if target.bot:
+            await inter.response.send_message("You cannot attack bots.", ephemeral=True)
+            return
+
+        # Check if target is a mod - can't attack mods
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            target_member = inter.guild.get_member(target.id)
+            if mod_role and target_member and mod_role in target_member.roles:
+                await inter.response.send_message(
+                    "⚖️ You cannot attack moderators!", ephemeral=True
+                )
+                return
+
+        # Check if attacker is a mod - mods can't attack
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            attacker_member = inter.guild.get_member(inter.author.id)
+            if mod_role and attacker_member and mod_role in attacker_member.roles:
+                await inter.response.send_message(
+                    "⚖️ Moderators cannot attack users!", ephemeral=True
+                )
+                return
+
+        # Check if attacker has active ceasefire - break it if so
+        attacker_broke_ceasefire = False
+        if user_id in self.active_ceasefires:
+            ceasefire_time = self.active_ceasefires[user_id]
+            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                # Remove ceasefire
+                del self.active_ceasefires[user_id]
+                attacker_broke_ceasefire = True
+
+                # Apply 10-minute debuff
+                self.ceasefire_breakers[user_id] = now
+
+                # Send notification to channel 1456204479203639340
+                notification_channel = self.bot.get_channel(1456204479203639340)
+                if notification_channel:
+                    embed = disnake.Embed(
+                        title="⚠️ Ceasefire Broken!",
+                        description=f"{inter.author.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
+                        color=disnake.Color.red(),
+                    )
+                    await notification_channel.send(embed=embed)
+            else:
+                # Expired ceasefire, clean up
+                del self.active_ceasefires[user_id]
+
+        async with db.pool.acquire() as conn:
+            # Get both users' points
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            target_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", target.id
+            )
+
+            attacker_points = attacker_points or 0
+            target_points = target_points or 0
+
+            # Check both have at least the attack amount
+            if attacker_points < amount:
+                await inter.response.send_message(
+                    f"You need at least {amount} {Config.POINT_NAME} to attack.",
+                    ephemeral=True,
+                )
+                return
+
+            if target_points < amount:
+                await inter.response.send_message(
+                    f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
+                    ephemeral=True,
+                )
+                return
+
+            # Check if target has active ceasefire
+            target_has_ceasefire = False
+            if target.id in self.active_ceasefires:
+                ceasefire_time = self.active_ceasefires[target.id]
+                if (
+                    datetime.datetime.now() - ceasefire_time
+                ).total_seconds() < 900:  # 15 minutes
+                    target_has_ceasefire = True
+                else:
+                    # Expired ceasefire, clean up
+                    del self.active_ceasefires[target.id]
+
+            if target_has_ceasefire:
+                await inter.response.send_message(
+                    f"☮️ {target.mention} has an active ceasefire! They cannot be attacked right now.",
+                    ephemeral=True,
+                )
+                return
+
+            # Check if target has active dodge - this determines success
+            target_has_dodge = False
+            if target.id in self.active_dodges:
+                dodge_time = self.active_dodges[target.id]
+                if (
+                    datetime.datetime.now() - dodge_time
+                ).total_seconds() < 300:  # 5 minutes
+                    target_has_dodge = True
+                    # Remove dodge after use
+                    del self.active_dodges[target.id]
+                else:
+                    # Expired dodge, clean up
+                    del self.active_dodges[target.id]
+
+            if target_has_dodge:
+                # Pierce attack succeeds - target had dodge
+                # Attacker steals points from target
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
+                    inter.author.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
+                    target.id,
+                )
+
+                # Track attack stats (win)
+                if amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+
+                # Update cooldown
+                self.attack_cooldowns[user_id] = now
+                await inter.response.send_message(
+                    f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and stole {amount} {Config.POINT_NAME}!"
+                )
+            else:
+                # Pierce attack fails - target didn't have dodge
+                # Attacker loses points to target
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
+                    inter.author.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
+                    target.id,
+                )
+
+                # Track attack stats (loss)
+                if amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
+                        inter.author.id,
+                    )
+
+                # Update cooldown
+                self.attack_cooldowns[user_id] = now
+                await inter.response.send_message(
+                    f"❌ **Pierce failed!** {target.mention} had no dodge and you lost {amount} {Config.POINT_NAME}!"
+                )
 
     @commands.slash_command(description="Test attack simulation (no points changed)")
     async def test_attack(
@@ -737,7 +969,7 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
     ):
-        """Activate ceasefire to be immune from attacks (costs 100 points, lasts 15 minutes)"""
+        """Activate ceasefire to be immune from attacks (costs 50 points, lasts 15 minutes)"""
         now = datetime.datetime.now()
         user_id = inter.author.id
 
@@ -772,16 +1004,16 @@ class Points(commands.Cog):
             )
             user_points = user_points or 0
 
-            if user_points < 100:
+            if user_points < 50:
                 await inter.response.send_message(
-                    f"You need at least 100 {Config.POINT_NAME} to activate ceasefire.",
+                    f"You need at least 50 {Config.POINT_NAME} to activate ceasefire.",
                     ephemeral=True,
                 )
                 return
 
-            # Deduct 100 points
+            # Deduct 50 points
             await conn.execute(
-                "UPDATE users SET points = points - 100 WHERE user_id = $1",
+                "UPDATE users SET points = points - 50 WHERE user_id = $1",
                 inter.author.id,
             )
 
@@ -790,7 +1022,7 @@ class Points(commands.Cog):
         self.ceasefire_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f"☮️ **Ceasefire activated!** (-100 {Config.POINT_NAME}) You are immune from all attacks for 15 minutes!",
+            f"☮️ **Ceasefire activated!** (-50 {Config.POINT_NAME}) You are immune from all attacks for 15 minutes!",
             ephemeral=True,
         )
 
@@ -1611,18 +1843,18 @@ class Points(commands.Cog):
                     inline=False,
                 )
 
-        # Active effects (dodge, ceasefire)
+        # Active effects (ceasefire, debuff) - Note: Dodge is NOT shown to keep it strategic
         active_effects = []
         now = datetime.datetime.now()
 
-        # Check dodge
-        if target.id in self.active_dodges:
-            dodge_time = self.active_dodges[target.id]
-            if (now - dodge_time).total_seconds() < 300:  # 5 minutes
-                remaining_secs = int(300 - (now - dodge_time).total_seconds())
-                remaining_mins = remaining_secs // 60
-                remaining_secs = remaining_secs % 60
-                active_effects.append(f"🛡️ Dodge: {remaining_mins}m {remaining_secs}s")
+        # Don't show dodge status - it should be a surprise!
+        # if target.id in self.active_dodges:
+        #     dodge_time = self.active_dodges[target.id]
+        #     if (now - dodge_time).total_seconds() < 300:  # 5 minutes
+        #         remaining_secs = int(300 - (now - dodge_time).total_seconds())
+        #         remaining_mins = remaining_secs // 60
+        #         remaining_secs = remaining_secs % 60
+        #         active_effects.append(f"🛡️ Dodge: {remaining_mins}m {remaining_secs}s")
 
         # Check ceasefire
         if target.id in self.active_ceasefires:
