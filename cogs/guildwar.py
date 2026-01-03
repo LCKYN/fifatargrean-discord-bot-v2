@@ -37,11 +37,79 @@ class GuildWarView(disnake.ui.View):
         team2_button.callback = self.join_team2
         self.add_item(team2_button)
 
+        # Unjoin button
+        unjoin_button = disnake.ui.Button(
+            label="Leave War",
+            style=disnake.ButtonStyle.secondary,
+            custom_id=f"guildwar_{war_id}_unjoin",
+            disabled=not is_active,
+        )
+        unjoin_button.callback = self.unjoin_war
+        self.add_item(unjoin_button)
+
     async def join_team1(self, interaction: disnake.MessageInteraction):
         await self.join_team(interaction, 1)
 
     async def join_team2(self, interaction: disnake.MessageInteraction):
         await self.join_team(interaction, 2)
+
+    async def unjoin_war(self, interaction: disnake.MessageInteraction):
+        """Leave the war and get refunded"""
+        user_id = interaction.author.id
+
+        async with db.pool.acquire() as conn:
+            # Get war details
+            war = await conn.fetchrow(
+                "SELECT * FROM guild_wars WHERE id = $1", self.war_id
+            )
+
+            if not war:
+                await interaction.response.send_message(
+                    "This war no longer exists.", ephemeral=True
+                )
+                return
+
+            if war["status"] != "recruiting":
+                await interaction.response.send_message(
+                    "Cannot leave a war that has already started.", ephemeral=True
+                )
+                return
+
+            # Check if user is in the war
+            member = await conn.fetchrow(
+                "SELECT points_bet FROM guild_war_members WHERE war_id = $1 AND user_id = $2",
+                self.war_id,
+                user_id,
+            )
+
+            if not member:
+                await interaction.response.send_message(
+                    "You are not in this war!", ephemeral=True
+                )
+                return
+
+            # Refund points
+            refund_amount = member["points_bet"]
+            await conn.execute(
+                "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                refund_amount,
+                user_id,
+            )
+
+            # Remove from war
+            await conn.execute(
+                "DELETE FROM guild_war_members WHERE war_id = $1 AND user_id = $2",
+                self.war_id,
+                user_id,
+            )
+
+            await interaction.response.send_message(
+                f"You left the war! (+{refund_amount} {Config.POINT_NAME} refunded)",
+                ephemeral=True,
+            )
+
+            # Update embed
+            await self.update_war_embed(interaction)
 
     async def join_team(
         self, interaction: disnake.MessageInteraction, team_number: int
@@ -522,6 +590,11 @@ class GuildWar(commands.Cog):
             hp = players[user_id]["hp"] if user_id in players else 0
             return f"<@{user_id}> {color} ({hp} HP)"
 
+        def apply_damage_variance(damage):
+            """Apply ±20% variance to damage as integer"""
+            variance = random.uniform(-0.20, 0.20)
+            return int(damage * (1 + variance))
+
         def get_alive():
             return [uid for uid, data in players.items() if data["hp"] > 0]
 
@@ -751,11 +824,11 @@ class GuildWar(commands.Cog):
 
                     base_damage = 50 + attacker.get("power_boost", 0)
 
-                    # Calculate critical hit chance
+                    # Calculate critical hit chance for attacker
                     crit_chance = 0.10 + (attacker.get("crit_boost", 0) / 100)
                     is_crit = random.random() < crit_chance
                     if is_crit:
-                        base_damage *= 2
+                        base_damage = int(base_damage * 1.5)
 
                     # Check if target is stunned
                     if target_action == "stunned":
@@ -765,6 +838,11 @@ class GuildWar(commands.Cog):
                         # If attacker is in defense mode, stunned takes half damage
                         if action == "defense":
                             stunned_damage = int(base_damage * 0.5)
+
+                        # Apply damage variance
+                        stunned_damage = apply_damage_variance(stunned_damage)
+
+                        if action == "defense":
                             await thread.send(
                                 f"🛡️ {format_user(user_id)} attacks stunned {format_user(target)}! {format_user(target)} takes {stunned_damage} damage (reduced)!"
                             )
@@ -806,6 +884,10 @@ class GuildWar(commands.Cog):
                                 attacker_damage * (1 + attacker["vulnerable"] / 100)
                             )
 
+                        # Apply damage variance
+                        defender_damage = apply_damage_variance(defender_damage)
+                        attacker_damage = apply_damage_variance(attacker_damage)
+
                         defender["hp"] -= defender_damage
                         attacker["hp"] -= attacker_damage
 
@@ -819,21 +901,29 @@ class GuildWar(commands.Cog):
                             )
 
                     elif target_action == "attack":
-                        # Attack vs Attack: both take full damage
-                        attacker_final_damage = base_damage
-                        defender_final_damage = 50 + defender.get("power_boost", 0)
+                        # Attack vs Attack: both take full damage with separate crit rolls
+                        # Calculate attacker's damage (already has crit applied to base_damage)
+                        attacker_base_damage = base_damage
+
+                        # Calculate defender's damage with separate crit roll
+                        defender_base_damage = 50 + defender.get("power_boost", 0)
+                        defender_crit_chance = 0.10 + (defender.get("crit_boost", 0) / 100)
+                        is_defender_crit = random.random() < defender_crit_chance
+                        if is_defender_crit:
+                            defender_base_damage = int(defender_base_damage * 1.5)
+
+                        attacker_final_damage = defender_base_damage
+                        defender_final_damage = attacker_base_damage
 
                         # Apply shields
                         if defender.get("shield", 0) > 0:
                             defender_final_damage = int(
-                                attacker_final_damage * (1 - defender["shield"] / 100)
+                                defender_final_damage * (1 - defender["shield"] / 100)
                             )
-                        else:
-                            defender_final_damage = attacker_final_damage
 
                         if attacker.get("shield", 0) > 0:
                             attacker_final_damage = int(
-                                defender_final_damage * (1 - attacker["shield"] / 100)
+                                attacker_final_damage * (1 - attacker["shield"] / 100)
                             )
 
                         # Apply vulnerability
@@ -849,12 +939,25 @@ class GuildWar(commands.Cog):
                                 * (1 + attacker["vulnerable"] / 100)
                             )
 
+                        # Apply damage variance
+                        defender_final_damage = apply_damage_variance(defender_final_damage)
+                        attacker_final_damage = apply_damage_variance(attacker_final_damage)
+
                         defender["hp"] -= defender_final_damage
                         attacker["hp"] -= attacker_final_damage
 
-                        if is_crit:
+                        # Show appropriate message based on who got crits
+                        if is_crit and is_defender_crit:
                             await thread.send(
-                                f"💥 **CRITICAL CLASH!** {format_user(user_id)} and {format_user(target)} attack each other! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
+                                f"💥💥 **DOUBLE CRITICAL!** {format_user(user_id)} and {format_user(target)} both land critical hits! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
+                            )
+                        elif is_crit:
+                            await thread.send(
+                                f"💥 **CRITICAL!** {format_user(user_id)} lands a critical hit! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
+                            )
+                        elif is_defender_crit:
+                            await thread.send(
+                                f"💥 **CRITICAL!** {format_user(target)} lands a critical hit! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
                             )
                         else:
                             await thread.send(
@@ -939,6 +1042,10 @@ class GuildWar(commands.Cog):
             players[loser_fighter]["hp"] = 0
             await thread.send(f"💀 {format_user(loser_fighter)} is defeated!")
             await asyncio.sleep(1.5)
+
+            # Recalculate alive lists after sudden death
+            team1_alive = get_team_alive(1)
+            team2_alive = get_team_alive(2)
 
         elif len(team1_alive) > len(team2_alive):
             winning_team = 1
