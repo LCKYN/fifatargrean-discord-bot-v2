@@ -208,8 +208,8 @@ class CreateWarModal(disnake.ui.Modal):
                 max_length=50,
             ),
             disnake.ui.TextInput(
-                label="Entry Cost (50-500)",
-                placeholder="Enter points required to join (50-500)",
+                label="Entry Cost (10-500)",
+                placeholder="Enter points required to join (10-500)",
                 custom_id="entry_cost",
                 style=disnake.TextInputStyle.short,
                 min_length=2,
@@ -225,9 +225,9 @@ class CreateWarModal(disnake.ui.Modal):
 
         try:
             entry_cost = int(inter.text_values["entry_cost"])
-            if entry_cost < 50 or entry_cost > 500:
+            if entry_cost < 10 or entry_cost > 500:
                 await inter.response.send_message(
-                    "Entry cost must be between 50 and 500.", ephemeral=True
+                    "Entry cost must be between 10 and 500.", ephemeral=True
                 )
                 return
         except ValueError:
@@ -375,75 +375,572 @@ class GuildWar(commands.Cog):
         # Battle simulation
         await self.simulate_battle(thread, war, team1_members, team2_members)
 
-    async def simulate_battle(self, thread, war, team1_members, team2_members):
-        """Simulate the guild war battle"""
-        team1_alive = [m["user_id"] for m in team1_members]
-        team2_alive = [m["user_id"] for m in team2_members]
+    @commands.slash_command(description="[MOD/Creator] Cancel the guild war and refund")
+    async def cancelwar(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        war_id: int = commands.Param(description="War ID to cancel"),
+    ):
+        """Cancel a guild war and refund all participants"""
+        # Defer response first
+        await inter.response.defer(ephemeral=True)
 
-        battle_events = [
-            "{user} charges forward!",
-            "{user} defends their position!",
-            "{user} launches a fierce attack!",
-            "{user} retreats to recover!",
-            "{user} runs away from the battle!",
-            "{user} strikes {target} with a critical hit!",
-            "{user} defeats {target}!",
-            "{user} overwhelms {target}!",
-            "{user} outmaneuvers {target}!",
-        ]
+        # Unarchive thread if needed
+        async with db.pool.acquire() as conn:
+            war = await conn.fetchrow("SELECT * FROM guild_wars WHERE id = $1", war_id)
+
+            if not war:
+                await inter.followup.send("War not found.", ephemeral=True)
+                return
+
+        # Unarchive thread if it's archived
+        thread = self.bot.get_channel(war["thread_id"])
+        if thread and isinstance(thread, disnake.Thread) and thread.archived:
+            await thread.edit(archived=False)
+
+        async with db.pool.acquire() as conn:
+            # Check permission
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            is_mod = mod_role and mod_role in inter.author.roles
+            is_creator = war["creator_id"] == inter.author.id
+
+            if not is_mod and not is_creator:
+                await inter.followup.send(
+                    "Only the creator or a mod can cancel this war.", ephemeral=True
+                )
+                return
+
+            if war["status"] == "finished":
+                await inter.followup.send(
+                    "Cannot cancel a finished war.", ephemeral=True
+                )
+                return
+
+            if war["status"] == "cancelled":
+                await inter.followup.send(
+                    "This war is already cancelled.", ephemeral=True
+                )
+                return
+
+            # Get all members
+            all_members = await conn.fetch(
+                "SELECT user_id, points_bet FROM guild_war_members WHERE war_id = $1",
+                war_id,
+            )
+
+            # Refund all members
+            for member in all_members:
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    member["points_bet"],
+                    member["user_id"],
+                )
+
+            # Update war status
+            await conn.execute(
+                "UPDATE guild_wars SET status = 'cancelled' WHERE id = $1", war_id
+            )
+
+        # Update thread message
+        try:
+            if thread:
+                message = await thread.fetch_message(war["message_id"])
+
+                embed = disnake.Embed(
+                    title=f"⚔️ Guild War: {war['war_name']} [CANCELLED]",
+                    description=f"This war has been cancelled. All {len(all_members)} participants have been refunded.",
+                    color=disnake.Color.red(),
+                )
+
+                embed.set_footer(
+                    text=f"War ID: {war_id} | Cancelled by {inter.author.display_name}"
+                )
+
+                view = GuildWarView(
+                    war_id, war["team1_name"], war["team2_name"], is_active=False
+                )
+                await message.edit(embed=embed, view=view)
+
+                await thread.send(
+                    f"❌ **War Cancelled!**\n{len(all_members)} participants have been refunded their entry cost."
+                )
+
+                # Archive thread
+                await thread.edit(archived=True, locked=True)
+        except Exception as e:
+            print(f"Error updating cancelled war: {e}")
+
+        await inter.followup.send(
+            f"✅ War #{war_id} cancelled. All {len(all_members)} participants refunded.",
+            ephemeral=True,
+        )
+
+    async def simulate_battle(self, thread, war, team1_members, team2_members):
+        """Simulate the guild war battle with HP and attack/defense mechanics"""
+        # Initialize player stats
+        players = {}
+        team1_ids = []
+        team2_ids = []
+
+        for member in team1_members:
+            user_id = member["user_id"]
+            players[user_id] = {
+                "hp": 100,
+                "team": 1,
+                "forced_attack": False,
+                "dodge_active": False,
+                "power_boost": 0,  # Extra damage
+                "shield": 0,  # Damage reduction %
+                "crit_boost": 0,  # Extra crit chance
+                "vulnerable": 0,  # Extra damage taken %
+                "stunned": False,  # Skip turn
+            }
+            team1_ids.append(user_id)
+
+        for member in team2_members:
+            user_id = member["user_id"]
+            players[user_id] = {
+                "hp": 100,
+                "team": 2,
+                "forced_attack": False,
+                "dodge_active": False,
+                "power_boost": 0,
+                "shield": 0,
+                "crit_boost": 0,
+                "vulnerable": 0,
+                "stunned": False,
+            }
+            team2_ids.append(user_id)
+
+        def format_user(user_id):
+            team = (
+                players[user_id]["team"]
+                if user_id in players
+                else (1 if user_id in team1_ids else 2)
+            )
+            color = "🔵" if team == 1 else "🔴"
+            hp = players[user_id]["hp"] if user_id in players else 0
+            return f"<@{user_id}> {color} ({hp} HP)"
+
+        def get_alive():
+            return [uid for uid, data in players.items() if data["hp"] > 0]
+
+        def get_team_alive(team_num):
+            return [
+                uid
+                for uid, data in players.items()
+                if data["hp"] > 0 and data["team"] == team_num
+            ]
 
         await thread.send("⚔️ **THE BATTLE BEGINS!**\n━━━━━━━━━━━━━━━━━━━━")
         await asyncio.sleep(2)
 
         round_num = 1
-        while len(team1_alive) > 0 and len(team2_alive) > 0:
-            await thread.send(f"\n**Round {round_num}**")
+        while len(get_team_alive(1)) > 0 and len(get_team_alive(2)) > 0:
+            await thread.send(f"\n**━━━ Round {round_num} ━━━**")
 
-            # Random events
-            num_events = random.randint(2, 4)
-            for _ in range(num_events):
-                event_type = random.choice(["kill", "action"])
+            alive = get_alive()
+            round_actions = {}
 
-                if (
-                    event_type == "kill"
-                    and len(team1_alive) > 0
-                    and len(team2_alive) > 0
-                ):
-                    # Someone gets eliminated
-                    attacker_team = random.choice([1, 2])
-                    if (
-                        attacker_team == 1
-                        and len(team1_alive) > 0
-                        and len(team2_alive) > 0
-                    ):
-                        attacker = random.choice(team1_alive)
-                        victim = random.choice(team2_alive)
-                        team2_alive.remove(victim)
-                        await thread.send(f"💀 <@{attacker}> defeats <@{victim}>!")
-                    elif len(team2_alive) > 0 and len(team1_alive) > 0:
-                        attacker = random.choice(team2_alive)
-                        victim = random.choice(team1_alive)
-                        team1_alive.remove(victim)
-                        await thread.send(f"💀 <@{attacker}> defeats <@{victim}>!")
+            # BUFF/DEBUFF PHASE - Show before combat
+            await thread.send("**⚡ Status Phase**")
+
+            # Determine actions for each player
+            for user_id in alive:
+                player = players[user_id]
+
+                # Clear one-turn effects from previous round
+                if player.get("stunned"):
+                    player["stunned"] = False
+
+                # 30% chance for buff/debuff event
+                event_type = None  # Initialize event_type
+                if random.random() < 0.30:
+                    event_type = random.choice(
+                        [
+                            "retreat",
+                            "run_away",
+                            "dodge",
+                            "power_up",
+                            "shield",
+                            "focus",
+                            "heal",
+                            "berserk",
+                            "weaken",
+                            "vulnerable",
+                            "stun",
+                        ]
+                    )
+
+                    # DEBUFFS
+                    if event_type == "retreat":
+                        old_hp = player["hp"]
+                        player["hp"] = player["hp"] // 2
+                        await thread.send(
+                            f"🏃 {format_user(user_id)} retreats in fear! HP reduced by half ({old_hp} → {player['hp']})!"
+                        )
+                        round_actions[user_id] = "retreat"
+                    elif event_type == "run_away":
+                        old_hp = player["hp"]
+                        player["hp"] = player["hp"] // 2
+                        await thread.send(
+                            f"😱 {format_user(user_id)} runs away! HP reduced by half ({old_hp} → {player['hp']})!"
+                        )
+                        round_actions[user_id] = "run_away"
+                    elif event_type == "weaken":
+                        player["power_boost"] = -10
+                        await thread.send(
+                            f"💔 {format_user(user_id)} is weakened! -10 damage this round!"
+                        )
+                        round_actions[user_id] = "weakened"
+                    elif event_type == "vulnerable":
+                        player["vulnerable"] = 30
+                        await thread.send(
+                            f"🩸 {format_user(user_id)} becomes vulnerable! +30% damage taken this round!"
+                        )
+                        round_actions[user_id] = "vulnerable_state"
+                    elif event_type == "stun":
+                        player["stunned"] = True
+                        await thread.send(
+                            f"💫 {format_user(user_id)} is stunned! Cannot act this round!"
+                        )
+                        round_actions[user_id] = "stunned"
+
+                    # BUFFS
+                    elif event_type == "dodge":
+                        player["dodge_active"] = True
+                        await thread.send(
+                            f"✨ {format_user(user_id)} activates dodge! (50% evasion)"
+                        )
+                        round_actions[user_id] = "dodge_prep"
+                    elif event_type == "power_up":
+                        player["power_boost"] = 20
+                        await thread.send(
+                            f"💪 {format_user(user_id)} powers up! +20 damage this round!"
+                        )
+                        round_actions[user_id] = "powered_up"
+                    elif event_type == "shield":
+                        player["shield"] = 40
+                        await thread.send(
+                            f"🛡️ {format_user(user_id)} raises a shield! -40% damage taken this round!"
+                        )
+                        round_actions[user_id] = "shielded"
+                    elif event_type == "focus":
+                        player["crit_boost"] = 20
+                        await thread.send(
+                            f"🎯 {format_user(user_id)} focuses intensely! +20% critical chance!"
+                        )
+                        round_actions[user_id] = "focused"
+                    elif event_type == "heal":
+                        heal_amount = 25
+                        player["hp"] = min(100, player["hp"] + heal_amount)
+                        await thread.send(
+                            f"💚 {format_user(user_id)} recovers health! +{heal_amount} HP!"
+                        )
+                        round_actions[user_id] = "healed"
+                    elif event_type == "berserk":
+                        player["power_boost"] = 25
+                        player["vulnerable"] = 25
+                        await thread.send(
+                            f"😤 {format_user(user_id)} goes berserk! +25 damage but +25% damage taken!"
+                        )
+                        round_actions[user_id] = "berserk"
+
+                    await asyncio.sleep(0.8)
+                    continue
+
+                # Reset temporary buffs/debuffs if no event
+                if event_type not in [
+                    "power_up",
+                    "shield",
+                    "focus",
+                    "weaken",
+                    "vulnerable",
+                    "berserk",
+                ]:
+                    player["power_boost"] = 0
+                    player["shield"] = 0
+                    player["crit_boost"] = 0
+                    player["vulnerable"] = 0
+
+                # Determine attack or defense
+                if player.get("stunned"):
+                    round_actions[user_id] = "stunned"
+                elif player["forced_attack"]:
+                    round_actions[user_id] = "attack"
+                    player["forced_attack"] = False
                 else:
-                    # Random action
-                    all_alive = team1_alive + team2_alive
-                    if all_alive:
-                        actor = random.choice(all_alive)
-                        event = random.choice(battle_events[:5])  # Non-kill events
-                        await thread.send(event.format(user=f"<@{actor}>"))
+                    # 60% attack, 40% defense
+                    round_actions[user_id] = (
+                        "attack" if random.random() < 0.6 else "defense"
+                    )
 
-                await asyncio.sleep(1.5)
+                    if round_actions[user_id] == "defense":
+                        player["forced_attack"] = True  # Next round must attack
+
+            await asyncio.sleep(1)
+            await thread.send("**⚔️ Combat Phase**")
+
+            # Process combat actions
+            processed = set()
+
+            for user_id in alive:
+                skip_actions = [
+                    "retreat",
+                    "run_away",
+                    "dodge_prep",
+                    "weakened",
+                    "vulnerable_state",
+                    "stunned",
+                    "powered_up",
+                    "shielded",
+                    "focused",
+                    "healed",
+                    "berserk",
+                ]
+                if user_id in processed or round_actions.get(user_id) in skip_actions:
+                    continue
+
+                if players[user_id]["hp"] <= 0:
+                    continue
+
+                action = round_actions[user_id]
+
+                if action == "attack":
+                    # Find target from opposite team
+                    enemy_team = 2 if players[user_id]["team"] == 1 else 1
+                    enemies = [
+                        e for e in get_team_alive(enemy_team) if e not in processed
+                    ]
+
+                    if not enemies:
+                        continue
+
+                    target = random.choice(enemies)
+                    target_action = round_actions.get(target, "attack")
+
+                    # Check for perfect strike (2% chance)
+                    if random.random() < 0.02:
+                        players[target]["hp"] = 0
+                        await thread.send(
+                            f"🌟 **PERFECT STRIKE!** {format_user(user_id)} instantly defeats {format_user(target)}!"
+                        )
+                        processed.add(user_id)
+                        processed.add(target)
+                        await asyncio.sleep(1.5)
+                        continue
+
+                    # Check dodge
+                    if players[target].get("dodge_active") and random.random() < 0.5:
+                        await thread.send(
+                            f"✨ {format_user(target)} dodges {format_user(user_id)}'s attack!"
+                        )
+                        players[target]["dodge_active"] = False
+                        processed.add(user_id)
+                        processed.add(target)
+                        await asyncio.sleep(1)
+                        continue
+
+                    players[target]["dodge_active"] = (
+                        False  # Remove dodge after being hit
+                    )
+
+                    # Calculate base damage with buffs
+                    attacker = players[user_id]
+                    defender = players[target]
+
+                    base_damage = 50 + attacker.get("power_boost", 0)
+
+                    # Calculate critical hit chance
+                    crit_chance = 0.10 + (attacker.get("crit_boost", 0) / 100)
+                    is_crit = random.random() < crit_chance
+                    if is_crit:
+                        base_damage *= 2
+
+                    # Check if target is stunned
+                    if target_action == "stunned":
+                        # Stunned player always takes damage
+                        stunned_damage = base_damage
+
+                        # If attacker is in defense mode, stunned takes half damage
+                        if action == "defense":
+                            stunned_damage = int(base_damage * 0.5)
+                            await thread.send(
+                                f"🛡️ {format_user(user_id)} attacks stunned {format_user(target)}! {format_user(target)} takes {stunned_damage} damage (reduced)!"
+                            )
+                        else:
+                            await thread.send(
+                                f"⚔️ {format_user(user_id)} attacks stunned {format_user(target)}! {format_user(target)} takes {stunned_damage} damage!"
+                            )
+
+                        defender["hp"] -= stunned_damage
+
+                        if defender["hp"] <= 0:
+                            await thread.send(f"💀 {format_user(target)} has been defeated!")
+
+                        processed.add(user_id)
+                        processed.add(target)
+                        await asyncio.sleep(1.5)
+                        continue
+
+                    if target_action == "defense":
+                        # Attack vs Defense: defender takes 10 damage, attacker takes 30 damage
+                        defender_damage = 10
+                        attacker_damage = 30
+
+                        # Apply shield to defender
+                        if defender.get("shield", 0) > 0:
+                            defender_damage = int(
+                                defender_damage * (1 - defender["shield"] / 100)
+                            )
+
+                        # Apply vulnerability to defender
+                        if defender.get("vulnerable", 0) > 0:
+                            defender_damage = int(
+                                defender_damage * (1 + defender["vulnerable"] / 100)
+                            )
+
+                        # Apply vulnerability to attacker
+                        if attacker.get("vulnerable", 0) > 0:
+                            attacker_damage = int(
+                                attacker_damage * (1 + attacker["vulnerable"] / 100)
+                            )
+
+                        defender["hp"] -= defender_damage
+                        attacker["hp"] -= attacker_damage
+
+                        if is_crit:
+                            await thread.send(
+                                f"💥 **CRITICAL!** {format_user(user_id)} attacks {format_user(target)} who defends! {format_user(target)} takes {defender_damage} damage, {format_user(user_id)} takes {attacker_damage} damage!"
+                            )
+                        else:
+                            await thread.send(
+                                f"⚔️ {format_user(user_id)} attacks {format_user(target)} who defends! {format_user(target)} takes {defender_damage} damage, {format_user(user_id)} takes {attacker_damage} damage!"
+                            )
+
+                    elif target_action == "attack":
+                        # Attack vs Attack: both take full damage
+                        attacker_final_damage = base_damage
+                        defender_final_damage = 50 + defender.get("power_boost", 0)
+
+                        # Apply shields
+                        if defender.get("shield", 0) > 0:
+                            defender_final_damage = int(
+                                attacker_final_damage * (1 - defender["shield"] / 100)
+                            )
+                        else:
+                            defender_final_damage = attacker_final_damage
+
+                        if attacker.get("shield", 0) > 0:
+                            attacker_final_damage = int(
+                                defender_final_damage * (1 - attacker["shield"] / 100)
+                            )
+
+                        # Apply vulnerability
+                        if defender.get("vulnerable", 0) > 0:
+                            defender_final_damage = int(
+                                defender_final_damage
+                                * (1 + defender["vulnerable"] / 100)
+                            )
+
+                        if attacker.get("vulnerable", 0) > 0:
+                            attacker_final_damage = int(
+                                attacker_final_damage
+                                * (1 + attacker["vulnerable"] / 100)
+                            )
+
+                        defender["hp"] -= defender_final_damage
+                        attacker["hp"] -= attacker_final_damage
+
+                        if is_crit:
+                            await thread.send(
+                                f"💥 **CRITICAL CLASH!** {format_user(user_id)} and {format_user(target)} attack each other! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
+                            )
+                        else:
+                            await thread.send(
+                                f"🔥 {format_user(user_id)} and {format_user(target)} clash! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
+                            )
+
+                    # Check for deaths
+                    if defender["hp"] <= 0:
+                        await thread.send(
+                            f"💀 {format_user(target)} has been defeated!"
+                        )
+                    if attacker["hp"] <= 0:
+                        await thread.send(
+                            f"💀 {format_user(user_id)} has been defeated!"
+                        )
+
+                    # Clear one-round buffs/debuffs after combat
+                    attacker["power_boost"] = 0
+                    attacker["shield"] = 0
+                    attacker["crit_boost"] = 0
+                    attacker["vulnerable"] = 0
+                    defender["power_boost"] = 0
+                    defender["shield"] = 0
+                    defender["crit_boost"] = 0
+                    defender["vulnerable"] = 0
+
+                    processed.add(user_id)
+                    processed.add(target)
+                    await asyncio.sleep(1.5)
+
+                elif action == "defense":
+                    # Defense with no attacker - just announce
+                    await thread.send(
+                        f"🛡️ {format_user(user_id)} takes a defensive stance!"
+                    )
+                    processed.add(user_id)
+                    await asyncio.sleep(0.8)
 
             round_num += 1
-            await asyncio.sleep(2)
+            await asyncio.sleep(1.5)
 
             # Safety limit
-            if round_num > 20:
+            if round_num > 30:
                 break
 
         # Determine winner
-        if len(team1_alive) > len(team2_alive):
+        team1_alive = get_team_alive(1)
+        team2_alive = get_team_alive(2)
+
+        # Handle draw - both teams eliminated
+        if len(team1_alive) == 0 and len(team2_alive) == 0:
+            await thread.send("\n━━━━━━━━━━━━━━━━━━━━")
+            await thread.send("⚔️ **IT'S A DRAW! SUDDEN DEATH!**")
+            await asyncio.sleep(2)
+
+            # Revive one random player from each team with 1 HP
+            team1_fighter = random.choice(team1_ids)
+            team2_fighter = random.choice(team2_ids)
+
+            players[team1_fighter]["hp"] = 1
+            players[team2_fighter]["hp"] = 1
+
+            await thread.send(f"\n{format_user(team1_fighter)} vs {format_user(team2_fighter)}")
+            await asyncio.sleep(2)
+
+            # 50/50 roll to determine winner (not shown)
+            if random.random() < 0.5:
+                winning_team = 1
+                winning_name = war["team1_name"]
+                winners = team1_members
+                winner_fighter = team1_fighter
+                loser_fighter = team2_fighter
+            else:
+                winning_team = 2
+                winning_name = war["team2_name"]
+                winners = team2_members
+                winner_fighter = team2_fighter
+                loser_fighter = team1_fighter
+
+            await thread.send(f"⚡ {format_user(winner_fighter)} strikes first!")
+            await asyncio.sleep(1.5)
+            players[loser_fighter]["hp"] = 0
+            await thread.send(f"💀 {format_user(loser_fighter)} is defeated!")
+            await asyncio.sleep(1.5)
+
+        elif len(team1_alive) > len(team2_alive):
             winning_team = 1
             winning_name = war["team1_name"]
             winners = team1_members
@@ -454,6 +951,17 @@ class GuildWar(commands.Cog):
 
         await thread.send("\n━━━━━━━━━━━━━━━━━━━━")
         await thread.send(f"🏆 **{winning_name} WINS!**")
+
+        # Show survivors
+        survivors = team1_alive if winning_team == 1 else team2_alive
+        if survivors:
+            survivor_list = "\n".join(
+                [
+                    f"{format_user(uid)} - {players[uid]['hp']} HP remaining"
+                    for uid in survivors
+                ]
+            )
+            await thread.send(f"\n**Survivors:**\n{survivor_list}")
 
         # Calculate and distribute rewards
         total_pool = sum(m["points_bet"] for m in team1_members) + sum(
