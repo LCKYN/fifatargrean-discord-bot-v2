@@ -259,7 +259,7 @@ class Points(commands.Cog):
                     if not channel_traps:
                         del self.active_traps[message.channel.id]
 
-                    # Notify about trap - delete after 60 seconds
+                    # Notify about trap - delete after 10 seconds
                     creator = message.guild.get_member(creator_id)
                     creator_name = (
                         creator.display_name if creator else f"User {creator_id}"
@@ -267,7 +267,7 @@ class Points(commands.Cog):
                     trap_msg = await message.reply(
                         f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 200 {Config.POINT_NAME}!"
                     )
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(10)
                     await trap_msg.delete()
                 else:
                     # Victim doesn't have enough points - add role for 1440 minutes
@@ -278,8 +278,6 @@ class Points(commands.Cog):
                             await member.add_roles(penalty_role)
 
                             # Schedule role removal after 1440 minutes (24 hours)
-                            import asyncio
-
                             async def remove_role_later():
                                 await asyncio.sleep(
                                     1440 * 60
@@ -297,7 +295,7 @@ class Points(commands.Cog):
                     if not channel_traps:
                         del self.active_traps[message.channel.id]
 
-                    # Notify about trap and penalty - delete after 60 seconds
+                    # Notify about trap and penalty - delete after 10 seconds
                     creator = message.guild.get_member(creator_id)
                     creator_name = (
                         creator.display_name if creator else f"User {creator_id}"
@@ -305,7 +303,7 @@ class Points(commands.Cog):
                     trap_msg = await message.reply(
                         f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** but doesn't have enough points! Penalty role added for 24 hours!"
                     )
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(10)
                     await trap_msg.delete()
 
     @commands.slash_command(description="Set a trap with a trigger word")
