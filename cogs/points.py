@@ -2105,7 +2105,15 @@ class Points(commands.Cog):
             )
 
         embed.set_footer(text=f"User ID: {target.id}")
-        await inter.response.send_message(embed=embed)
+        
+        # If used in channel 956301076271857764, don't delete
+        # If used outside, delete after 30 seconds
+        if inter.channel_id != 956301076271857764:
+            await inter.response.send_message(embed=embed)
+            await asyncio.sleep(30)
+            await inter.delete_original_response()
+        else:
+            await inter.response.send_message(embed=embed)
 
     @commands.slash_command(description="Create a beg request")
     async def beg(self, inter: disnake.ApplicationCommandInteraction):

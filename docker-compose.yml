@@ -1,4 +1,5 @@
 services:
+  # path: /root/fifatargrean-discord-bot-v2/
   bot:
     build: .
     restart: always
