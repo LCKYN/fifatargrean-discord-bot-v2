@@ -2177,6 +2177,18 @@ class AttackBeggarModal(disnake.ui.Modal):
             else:
                 # 45% success for ≤100 points, 35% for >100 points
                 win_chance = 0.35 if amount > 100 else 0.45
+                
+                # Modify win chance based on beggar's points
+                if beggar_points > 1500:
+                    # Easier to attack rich beggars (+20%)
+                    win_chance += 0.20
+                elif beggar_points < 500:
+                    # Harder to attack poor beggars (-20%)
+                    win_chance -= 0.20
+                
+                # Ensure win_chance stays within 0-1 range
+                win_chance = max(0.0, min(1.0, win_chance))
+                
                 success = random.random() < win_chance
 
             # Track stats based on amount
