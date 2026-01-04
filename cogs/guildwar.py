@@ -251,7 +251,14 @@ class GuildWarView(disnake.ui.View):
 
 
 class PotionShopView(disnake.ui.View):
-    def __init__(self, war_id: int, team1_name: str, team2_name: str, entry_cost: int, is_active: bool = True):
+    def __init__(
+        self,
+        war_id: int,
+        team1_name: str,
+        team2_name: str,
+        entry_cost: int,
+        is_active: bool = True,
+    ):
         super().__init__(timeout=None)
         self.war_id = war_id
         self.entry_cost = entry_cost
@@ -297,7 +304,9 @@ class PotionShopView(disnake.ui.View):
         team2_atk_button.callback = lambda i: self.buy_potion(i, 2, "atk")
         self.add_item(team2_atk_button)
 
-    async def buy_potion(self, interaction: disnake.MessageInteraction, team: int, potion_type: str):
+    async def buy_potion(
+        self, interaction: disnake.MessageInteraction, team: int, potion_type: str
+    ):
         user_id = interaction.author.id
 
         async with db.pool.acquire() as conn:
@@ -375,9 +384,9 @@ class PotionShopView(disnake.ui.View):
                 embed = disnake.Embed(
                     title="🧪 Potion Shop",
                     description=f"Buy potions for your team! Each potion costs **{self.potion_cost} {Config.POINT_NAME}**\\n"
-                                f"*HP Potions: +20 HP per potion*\\n"
-                                f"*ATK Potions: +5 ATK per potion*\\n"
-                                f"*Max 3 of each type per team*",
+                    f"*HP Potions: +20 HP per potion*\\n"
+                    f"*ATK Potions: +5 ATK per potion*\\n"
+                    f"*Max 3 of each type per team*",
                     color=disnake.Color.purple(),
                 )
 
@@ -512,9 +521,9 @@ class CreateWarModal(disnake.ui.Modal):
         potion_embed = disnake.Embed(
             title="🧪 Potion Shop",
             description=f"Buy potions for your team! Each potion costs **{int(entry_cost * 0.2)} {Config.POINT_NAME}**\n"
-                        f"*HP Potions: +20 HP per potion*\n"
-                        f"*ATK Potions: +5 ATK per potion*\n"
-                        f"*Max 3 of each type per team*",
+            f"*HP Potions: +20 HP per potion*\n"
+            f"*ATK Potions: +5 ATK per potion*\n"
+            f"*Max 3 of each type per team*",
             color=disnake.Color.purple(),
         )
 
@@ -530,7 +539,9 @@ class CreateWarModal(disnake.ui.Modal):
             inline=True,
         )
 
-        potion_view = PotionShopView(war_id, team1_name, team2_name, entry_cost, is_active=True)
+        potion_view = PotionShopView(
+            war_id, team1_name, team2_name, entry_cost, is_active=True
+        )
         potion_message = await thread.send(embed=potion_embed, view=potion_view)
 
         # Update database with thread and message IDs
@@ -977,7 +988,9 @@ class GuildWar(commands.Cog):
                 if action == "attack":
                     # Get random opponent from enemy team
                     enemy_team = 2 if players[user_id]["team"] == 1 else 1
-                    enemies = [e for e in get_team_alive(enemy_team) if players[e]["hp"] > 0]
+                    enemies = [
+                        e for e in get_team_alive(enemy_team) if players[e]["hp"] > 0
+                    ]
 
                     if enemies:
                         target = random.choice(enemies)
@@ -1036,7 +1049,9 @@ class GuildWar(commands.Cog):
                     defender["hp"] -= stunned_damage
 
                     if defender["hp"] <= 0:
-                        await thread.send(f"💀 {format_user(target_id)} has been defeated!")
+                        await thread.send(
+                            f"💀 {format_user(target_id)} has been defeated!"
+                        )
 
                     await asyncio.sleep(1.5)
                     continue
@@ -1049,13 +1064,19 @@ class GuildWar(commands.Cog):
 
                     # Apply shield to defender
                     if defender.get("shield", 0) > 0:
-                        defender_damage = int(defender_damage * (1 - defender["shield"] / 100))
+                        defender_damage = int(
+                            defender_damage * (1 - defender["shield"] / 100)
+                        )
 
                     # Apply vulnerability
                     if defender.get("vulnerable", 0) > 0:
-                        defender_damage = int(defender_damage * (1 + defender["vulnerable"] / 100))
+                        defender_damage = int(
+                            defender_damage * (1 + defender["vulnerable"] / 100)
+                        )
                     if attacker.get("vulnerable", 0) > 0:
-                        attacker_damage = int(attacker_damage * (1 + attacker["vulnerable"] / 100))
+                        attacker_damage = int(
+                            attacker_damage * (1 + attacker["vulnerable"] / 100)
+                        )
 
                     # Apply damage variance
                     defender_damage = apply_damage_variance(defender_damage)
@@ -1079,11 +1100,15 @@ class GuildWar(commands.Cog):
 
                     # Apply shield
                     if defender.get("shield", 0) > 0:
-                        defender_damage = int(defender_damage * (1 - defender["shield"] / 100))
+                        defender_damage = int(
+                            defender_damage * (1 - defender["shield"] / 100)
+                        )
 
                     # Apply vulnerability
                     if defender.get("vulnerable", 0) > 0:
-                        defender_damage = int(defender_damage * (1 + defender["vulnerable"] / 100))
+                        defender_damage = int(
+                            defender_damage * (1 + defender["vulnerable"] / 100)
+                        )
 
                     # Apply damage variance
                     defender_damage = apply_damage_variance(defender_damage)
@@ -1103,7 +1128,9 @@ class GuildWar(commands.Cog):
                 if defender["hp"] <= 0:
                     await thread.send(f"💀 {format_user(target_id)} has been defeated!")
                 if attacker["hp"] <= 0:
-                    await thread.send(f"💀 {format_user(attacker_id)} has been defeated!")
+                    await thread.send(
+                        f"💀 {format_user(attacker_id)} has been defeated!"
+                    )
 
                 # Clear one-round buffs/debuffs after combat
                 attacker["power_boost"] = attacker["base_power"]
@@ -1164,7 +1191,9 @@ class GuildWar(commands.Cog):
             players[team1_fighter]["hp"] = 1
             players[team2_fighter]["hp"] = 1
 
-            await thread.send(f"\n{format_user(team1_fighter)} vs {format_user(team2_fighter)}")
+            await thread.send(
+                f"\n{format_user(team1_fighter)} vs {format_user(team2_fighter)}"
+            )
             await asyncio.sleep(2)
 
             # 50/50 roll to determine winner (not shown)
