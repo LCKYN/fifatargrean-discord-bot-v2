@@ -229,7 +229,7 @@ class CreatePredictionModal(disnake.ui.Modal):
             cost_row = await conn.fetchval(
                 "SELECT value FROM bot_settings WHERE key = 'prediction_cost'"
             )
-            cost = int(cost_row) if cost_row else Config.PREDICTION_COST
+            cost = int(cost_row) if cost_row else 50
 
             # Check if mod (free) or charge cost
             mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
@@ -777,14 +777,14 @@ class Predictions(commands.Cog):
                     )
                     payouts.append((bet["user_id"], winnings))
 
-            # Give 75% of tax to non-mod creator
+            # Give 60% of tax to non-mod creator
             creator_member = inter.guild.get_member(pred["creator_id"])
             creator_is_mod = (
                 mod_role and creator_member and mod_role in creator_member.roles
             )
 
             if not creator_is_mod and total_tax > 0:
-                creator_bonus = int(total_tax * 0.75)
+                creator_bonus = int(total_tax * 0.60)
                 if creator_bonus > 0:
                     await conn.execute(
                         "UPDATE users SET points = points + $1 WHERE user_id = $2",
