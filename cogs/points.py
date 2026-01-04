@@ -140,16 +140,19 @@ class Points(commands.Cog):
                             return
                         points_to_add = 10
 
-                # Check daily cap (1000 points per day from chatting)
-                if daily_earned >= 1000:
+                # Check daily cap (600 points per day from chatting)
+                if daily_earned >= 600:
                     return  # Already hit daily cap
 
                 # Limit points_to_add to not exceed cap
-                if daily_earned + points_to_add > 1000:
-                    points_to_add = 1000 - daily_earned
+                if daily_earned + points_to_add > 600:
+                    points_to_add = 600 - daily_earned
 
                 if points_to_add <= 0:
                     return
+
+                # Save original points before applying luck modifiers (for daily tracking)
+                points_for_daily_cap = points_to_add
 
                 # Apply critical/bad luck based on current points
                 if current_points < 500:
@@ -162,10 +165,12 @@ class Points(commands.Cog):
                         points_to_add = 0
 
                 if points_to_add <= 0:
-                    # Update last_message_at even if 0 points
+                    # Update last_message_at and daily_earned even if 0 points (bad luck still counts toward cap)
                     await conn.execute(
-                        "UPDATE users SET last_message_at = $1 WHERE user_id = $2",
+                        "UPDATE users SET last_message_at = $1, daily_earned = $2, daily_earned_date = $3 WHERE user_id = $4",
                         now,
+                        daily_earned + points_for_daily_cap,
+                        today_bangkok,
                         message.author.id,
                     )
                     return
@@ -183,7 +188,7 @@ class Points(commands.Cog):
                     "UPDATE users SET points = points + $1, last_message_at = $2, daily_earned = $3, daily_earned_date = $4 WHERE user_id = $5",
                     points_to_add,
                     now,
-                    daily_earned + points_to_add,
+                    daily_earned + points_for_daily_cap,
                     today_bangkok,
                     message.author.id,
                 )
@@ -377,8 +382,10 @@ class Points(commands.Cog):
             )
             points = user_data["points"] if user_data else 0
             daily_earned = user_data["daily_earned"] if user_data else 0
+            # Cap display at 600 for users who earned more before cap change
+            display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {daily_earned}/1000 points earned",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned",
                 ephemeral=True,
             )
 
@@ -1835,9 +1842,11 @@ class Points(commands.Cog):
         embed.set_thumbnail(url=target.display_avatar.url)
 
         # Points info
+        # Cap display at 600 for users who earned more before cap change
+        display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {daily_earned}/1000",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600",
             inline=True,
         )
 
