@@ -16,6 +16,7 @@ class Points(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.attack_cooldowns = {}  # Track last attack time per user
+        self.beg_attack_cooldowns = {}  # Track last beg attack time per user
         self.trap_cooldowns = {}  # Track last trap time per user
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
         self.dodge_cooldowns = {}  # Track last dodge time per user
@@ -2116,6 +2117,20 @@ class AttackBeggarModal(disnake.ui.Modal):
         super().__init__(title="Attack Beggar", components=components)
 
     async def callback(self, inter: disnake.ModalInteraction):
+        # Check cooldown (60 seconds)
+        now = datetime.datetime.now()
+        user_id = inter.user.id
+
+        if user_id in self.points_cog.beg_attack_cooldowns:
+            time_passed = (now - self.points_cog.beg_attack_cooldowns[user_id]).total_seconds()
+            if time_passed < 60:
+                remaining = 60 - int(time_passed)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining} more seconds before attacking again.",
+                    ephemeral=True,
+                )
+                return
+
         try:
             amount = int(inter.text_values["amount"])
             if amount < 50 or amount > 500:
@@ -2177,7 +2192,7 @@ class AttackBeggarModal(disnake.ui.Modal):
             else:
                 # 45% success for ≤100 points, 35% for >100 points
                 win_chance = 0.35 if amount > 100 else 0.45
-                
+
                 # Modify win chance based on beggar's points
                 if beggar_points > 1500:
                     # Easier to attack rich beggars (+20%)
@@ -2185,14 +2200,17 @@ class AttackBeggarModal(disnake.ui.Modal):
                 elif beggar_points < 500:
                     # Harder to attack poor beggars (-20%)
                     win_chance -= 0.20
-                
+
                 # Ensure win_chance stays within 0-1 range
                 win_chance = max(0.0, min(1.0, win_chance))
-                
+
                 success = random.random() < win_chance
 
             # Track stats based on amount
             is_high_stakes = amount > 100
+
+            # Update cooldown
+            self.points_cog.beg_attack_cooldowns[user_id] = now
 
             if success:
                 # Attacker wins - steal the amount
