@@ -159,14 +159,11 @@ class Points(commands.Cog):
                     # 20% chance for critical (2x points)
                     if random.random() < 0.20:
                         points_to_add *= 2
-                elif current_points < 1500:
-                    # 40% chance for bad luck (0 points)
-                    if random.random() < 0.40:
+                elif current_points >= 1500:
+                    # 50% chance for bad luck (0 points) - rich tax
+                    if random.random() < 0.50:
                         points_to_add = 0
-                else:  # current_points >= 1500
-                    # 70% chance for bad luck (0 points) - rich tax
-                    if random.random() < 0.70:
-                        points_to_add = 0
+                # 500-1500 points: no special effect
 
                 if points_to_add <= 0:
                     # Update last_message_at and daily_earned even if 0 points (bad luck still counts toward cap)
