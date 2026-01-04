@@ -841,16 +841,16 @@ class GuildWar(commands.Cog):
                     # DEBUFFS
                     if event_type == "retreat":
                         old_hp = player["hp"]
-                        player["hp"] = player["hp"] // 2
+                        player["hp"] = int(player["hp"] * 0.75)
                         await thread.send(
-                            f"🏃 {format_user(user_id)} retreats in fear! HP reduced by half ({old_hp} → {player['hp']})!"
+                            f"🏃 {format_user(user_id)} retreats in fear! HP reduced by 25% ({old_hp} → {player['hp']})!"
                         )
                         round_actions[user_id] = "retreat"
                     elif event_type == "run_away":
                         old_hp = player["hp"]
-                        player["hp"] = player["hp"] // 2
+                        player["hp"] = int(player["hp"] * 0.75)
                         await thread.send(
-                            f"😱 {format_user(user_id)} runs away! HP reduced by half ({old_hp} → {player['hp']})!"
+                            f"😱 {format_user(user_id)} runs away! HP reduced by 25% ({old_hp} → {player['hp']})!"
                         )
                         round_actions[user_id] = "run_away"
                     elif event_type == "weaken":
@@ -876,7 +876,7 @@ class GuildWar(commands.Cog):
                     elif event_type == "dodge":
                         player["dodge_active"] = True
                         await thread.send(
-                            f"✨ {format_user(user_id)} activates dodge! (50% evasion)"
+                            f"✨ {format_user(user_id)} activates dodge! (75% evasion)"
                         )
                         round_actions[user_id] = "dodge_prep"
                     elif event_type == "power_up":
@@ -936,9 +936,9 @@ class GuildWar(commands.Cog):
                     round_actions[user_id] = "attack"
                     player["forced_attack"] = False
                 else:
-                    # 60% attack, 40% defense
+                    # 75% attack, 25% defense
                     round_actions[user_id] = (
-                        "attack" if random.random() < 0.6 else "defense"
+                        "attack" if random.random() < 0.75 else "defense"
                     )
 
                     if round_actions[user_id] == "defense":
@@ -950,7 +950,13 @@ class GuildWar(commands.Cog):
             # Process combat actions
             processed = set()
 
+            # First, process all attackers - each gets a random target
+            attackers = []
             for user_id in alive:
+                if players[user_id]["hp"] <= 0:
+                    continue
+
+                action = round_actions.get(user_id)
                 skip_actions = [
                     "retreat",
                     "run_away",
@@ -964,220 +970,162 @@ class GuildWar(commands.Cog):
                     "healed",
                     "berserk",
                 ]
-                if user_id in processed or round_actions.get(user_id) in skip_actions:
-                    continue
 
-                if players[user_id]["hp"] <= 0:
+                if action in skip_actions:
                     continue
-
-                action = round_actions[user_id]
 
                 if action == "attack":
-                    # Find target from opposite team
+                    # Get random opponent from enemy team
                     enemy_team = 2 if players[user_id]["team"] == 1 else 1
-                    enemies = [
-                        e for e in get_team_alive(enemy_team) if e not in processed
-                    ]
+                    enemies = [e for e in get_team_alive(enemy_team) if players[e]["hp"] > 0]
 
-                    if not enemies:
-                        continue
+                    if enemies:
+                        target = random.choice(enemies)
+                        attackers.append((user_id, target))
 
-                    target = random.choice(enemies)
-                    target_action = round_actions.get(target, "attack")
+            # Process each attack
+            for attacker_id, target_id in attackers:
+                if players[attacker_id]["hp"] <= 0 or players[target_id]["hp"] <= 0:
+                    continue
 
-                    # Check for perfect strike (2% chance)
-                    if random.random() < 0.02:
-                        players[target]["hp"] = 0
-                        await thread.send(
-                            f"🌟 **PERFECT STRIKE!** {format_user(user_id)} instantly defeats {format_user(target)}!"
-                        )
-                        processed.add(user_id)
-                        processed.add(target)
-                        await asyncio.sleep(1.5)
-                        continue
+                attacker = players[attacker_id]
+                defender = players[target_id]
+                target_action = round_actions.get(target_id, "attack")
 
-                    # Check dodge
-                    if players[target].get("dodge_active") and random.random() < 0.5:
-                        await thread.send(
-                            f"✨ {format_user(target)} dodges {format_user(user_id)}'s attack!"
-                        )
-                        players[target]["dodge_active"] = False
-                        processed.add(user_id)
-                        processed.add(target)
-                        await asyncio.sleep(1)
-                        continue
+                # Check for perfect strike (1% chance)
+                if random.random() < 0.01:
+                    defender["hp"] = 0
+                    await thread.send(
+                        f"🌟 **PERFECT STRIKE!** {format_user(attacker_id)} instantly defeats {format_user(target_id)}!"
+                    )
+                    await asyncio.sleep(1.5)
+                    continue
 
-                    players[target]["dodge_active"] = (
-                        False  # Remove dodge after being hit
+                # Check dodge
+                if defender.get("dodge_active") and random.random() < 0.75:
+                    await thread.send(
+                        f"✨ {format_user(target_id)} dodges {format_user(attacker_id)}'s attack!"
+                    )
+                    defender["dodge_active"] = False
+                    await asyncio.sleep(1)
+                    continue
+
+                defender["dodge_active"] = False  # Remove dodge after being hit
+
+                # Calculate base damage with buffs
+                base_damage = 50 + attacker.get("power_boost", 0)
+
+                # Calculate critical hit chance for attacker
+                crit_chance = 0.10 + (attacker.get("crit_boost", 0) / 100)
+                is_crit = random.random() < crit_chance
+                if is_crit:
+                    base_damage = int(base_damage * 1.5)
+
+                # Check if target is stunned
+                if target_action == "stunned":
+                    stunned_damage = int(base_damage * 1.25)
+                    stunned_damage = apply_damage_variance(stunned_damage)
+
+                    await thread.send(
+                        f"⚔️ {format_user(attacker_id)} attacks stunned {format_user(target_id)}! {format_user(target_id)} takes {stunned_damage} damage (1.25x)!"
                     )
 
-                    # Calculate base damage with buffs
-                    attacker = players[user_id]
-                    defender = players[target]
+                    defender["hp"] -= stunned_damage
 
-                    base_damage = 50 + attacker.get("power_boost", 0)
-
-                    # Calculate critical hit chance for attacker
-                    crit_chance = 0.10 + (attacker.get("crit_boost", 0) / 100)
-                    is_crit = random.random() < crit_chance
-                    if is_crit:
-                        base_damage = int(base_damage * 1.5)
-
-                    # Check if target is stunned
-                    if target_action == "stunned":
-                        # Stunned player always takes damage
-                        stunned_damage = base_damage
-
-                        # If attacker is in defense mode, stunned takes half damage
-                        if action == "defense":
-                            stunned_damage = int(base_damage * 0.5)
-
-                        # Apply damage variance
-                        stunned_damage = apply_damage_variance(stunned_damage)
-
-                        if action == "defense":
-                            await thread.send(
-                                f"🛡️ {format_user(user_id)} attacks stunned {format_user(target)}! {format_user(target)} takes {stunned_damage} damage (reduced)!"
-                            )
-                        else:
-                            await thread.send(
-                                f"⚔️ {format_user(user_id)} attacks stunned {format_user(target)}! {format_user(target)} takes {stunned_damage} damage!"
-                            )
-
-                        defender["hp"] -= stunned_damage
-
-                        if defender["hp"] <= 0:
-                            await thread.send(f"💀 {format_user(target)} has been defeated!")
-
-                        processed.add(user_id)
-                        processed.add(target)
-                        await asyncio.sleep(1.5)
-                        continue
-
-                    if target_action == "defense":
-                        # Attack vs Defense: defender takes 10 damage, attacker takes 30 damage
-                        defender_damage = 10
-                        attacker_damage = 30
-
-                        # Apply shield to defender
-                        if defender.get("shield", 0) > 0:
-                            defender_damage = int(
-                                defender_damage * (1 - defender["shield"] / 100)
-                            )
-
-                        # Apply vulnerability to defender
-                        if defender.get("vulnerable", 0) > 0:
-                            defender_damage = int(
-                                defender_damage * (1 + defender["vulnerable"] / 100)
-                            )
-
-                        # Apply vulnerability to attacker
-                        if attacker.get("vulnerable", 0) > 0:
-                            attacker_damage = int(
-                                attacker_damage * (1 + attacker["vulnerable"] / 100)
-                            )
-
-                        # Apply damage variance
-                        defender_damage = apply_damage_variance(defender_damage)
-                        attacker_damage = apply_damage_variance(attacker_damage)
-
-                        defender["hp"] -= defender_damage
-                        attacker["hp"] -= attacker_damage
-
-                        if is_crit:
-                            await thread.send(
-                                f"💥 **CRITICAL!** {format_user(user_id)} attacks {format_user(target)} who defends! {format_user(target)} takes {defender_damage} damage, {format_user(user_id)} takes {attacker_damage} damage!"
-                            )
-                        else:
-                            await thread.send(
-                                f"⚔️ {format_user(user_id)} attacks {format_user(target)} who defends! {format_user(target)} takes {defender_damage} damage, {format_user(user_id)} takes {attacker_damage} damage!"
-                            )
-
-                    elif target_action == "attack":
-                        # Attack vs Attack: both take full damage with separate crit rolls
-                        # Calculate attacker's damage (already has crit applied to base_damage)
-                        attacker_base_damage = base_damage
-
-                        # Calculate defender's damage with separate crit roll
-                        defender_base_damage = 50 + defender.get("power_boost", 0)
-                        defender_crit_chance = 0.10 + (defender.get("crit_boost", 0) / 100)
-                        is_defender_crit = random.random() < defender_crit_chance
-                        if is_defender_crit:
-                            defender_base_damage = int(defender_base_damage * 1.5)
-
-                        attacker_final_damage = defender_base_damage
-                        defender_final_damage = attacker_base_damage
-
-                        # Apply shields
-                        if defender.get("shield", 0) > 0:
-                            defender_final_damage = int(
-                                defender_final_damage * (1 - defender["shield"] / 100)
-                            )
-
-                        if attacker.get("shield", 0) > 0:
-                            attacker_final_damage = int(
-                                attacker_final_damage * (1 - attacker["shield"] / 100)
-                            )
-
-                        # Apply vulnerability
-                        if defender.get("vulnerable", 0) > 0:
-                            defender_final_damage = int(
-                                defender_final_damage
-                                * (1 + defender["vulnerable"] / 100)
-                            )
-
-                        if attacker.get("vulnerable", 0) > 0:
-                            attacker_final_damage = int(
-                                attacker_final_damage
-                                * (1 + attacker["vulnerable"] / 100)
-                            )
-
-                        # Apply damage variance
-                        defender_final_damage = apply_damage_variance(defender_final_damage)
-                        attacker_final_damage = apply_damage_variance(attacker_final_damage)
-
-                        defender["hp"] -= defender_final_damage
-                        attacker["hp"] -= attacker_final_damage
-
-                        # Show appropriate message based on who got crits
-                        if is_crit and is_defender_crit:
-                            await thread.send(
-                                f"💥💥 **DOUBLE CRITICAL!** {format_user(user_id)} and {format_user(target)} both land critical hits! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
-                            )
-                        elif is_crit:
-                            await thread.send(
-                                f"💥 **CRITICAL!** {format_user(user_id)} lands a critical hit! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
-                            )
-                        elif is_defender_crit:
-                            await thread.send(
-                                f"💥 **CRITICAL!** {format_user(target)} lands a critical hit! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
-                            )
-                        else:
-                            await thread.send(
-                                f"🔥 {format_user(user_id)} and {format_user(target)} clash! {format_user(target)} takes {defender_final_damage} damage, {format_user(user_id)} takes {attacker_final_damage} damage!"
-                            )
-
-                    # Check for deaths
                     if defender["hp"] <= 0:
+                        await thread.send(f"💀 {format_user(target_id)} has been defeated!")
+
+                    await asyncio.sleep(1.5)
+                    continue
+
+                # NEW MECHANICS: Check target's action
+                if target_action == "defense":
+                    # Target is defending: target takes 20% damage, attacker takes 80% damage
+                    defender_damage = int(base_damage * 0.20)
+                    attacker_damage = int(base_damage * 0.80)
+
+                    # Apply shield to defender
+                    if defender.get("shield", 0) > 0:
+                        defender_damage = int(defender_damage * (1 - defender["shield"] / 100))
+
+                    # Apply vulnerability
+                    if defender.get("vulnerable", 0) > 0:
+                        defender_damage = int(defender_damage * (1 + defender["vulnerable"] / 100))
+                    if attacker.get("vulnerable", 0) > 0:
+                        attacker_damage = int(attacker_damage * (1 + attacker["vulnerable"] / 100))
+
+                    # Apply damage variance
+                    defender_damage = apply_damage_variance(defender_damage)
+                    attacker_damage = apply_damage_variance(attacker_damage)
+
+                    defender["hp"] -= defender_damage
+                    attacker["hp"] -= attacker_damage
+
+                    if is_crit:
                         await thread.send(
-                            f"💀 {format_user(target)} has been defeated!"
+                            f"💥 **CRITICAL!** {format_user(attacker_id)} attacks {format_user(target_id)} who defends! {format_user(target_id)} takes {defender_damage} damage (20%), {format_user(attacker_id)} takes {attacker_damage} damage (80%)!"
                         )
-                    if attacker["hp"] <= 0:
+                    else:
                         await thread.send(
-                            f"💀 {format_user(user_id)} has been defeated!"
+                            f"🛡️ {format_user(attacker_id)} attacks {format_user(target_id)} who defends! {format_user(target_id)} takes {defender_damage} damage (20%), {format_user(attacker_id)} takes {attacker_damage} damage (80%)!"
                         )
 
-                    # Clear one-round buffs/debuffs after combat
-                    attacker["power_boost"] = attacker["base_power"]
-                    attacker["shield"] = 0
-                    attacker["crit_boost"] = 0
-                    attacker["vulnerable"] = 0
-                    defender["power_boost"] = defender["base_power"]
-                    defender["shield"] = 0
-                    defender["crit_boost"] = 0
-                    defender["vulnerable"] = 0
+                else:
+                    # Target is NOT defending (attacking or other): target takes full damage
+                    defender_damage = base_damage
 
-                    processed.add(user_id)
+                    # Apply shield
+                    if defender.get("shield", 0) > 0:
+                        defender_damage = int(defender_damage * (1 - defender["shield"] / 100))
+
+                    # Apply vulnerability
+                    if defender.get("vulnerable", 0) > 0:
+                        defender_damage = int(defender_damage * (1 + defender["vulnerable"] / 100))
+
+                    # Apply damage variance
+                    defender_damage = apply_damage_variance(defender_damage)
+
+                    defender["hp"] -= defender_damage
+
+                    if is_crit:
+                        await thread.send(
+                            f"💥 **CRITICAL!** {format_user(attacker_id)} attacks {format_user(target_id)}! {format_user(target_id)} takes {defender_damage} damage!"
+                        )
+                    else:
+                        await thread.send(
+                            f"⚔️ {format_user(attacker_id)} attacks {format_user(target_id)}! {format_user(target_id)} takes {defender_damage} damage!"
+                        )
+
+                # Check for deaths
+                if defender["hp"] <= 0:
+                    await thread.send(f"💀 {format_user(target_id)} has been defeated!")
+                if attacker["hp"] <= 0:
+                    await thread.send(f"💀 {format_user(attacker_id)} has been defeated!")
+
+                # Clear one-round buffs/debuffs after combat
+                attacker["power_boost"] = attacker["base_power"]
+                attacker["shield"] = 0
+                attacker["crit_boost"] = 0
+                attacker["vulnerable"] = 0
+                defender["power_boost"] = defender["base_power"]
+                defender["shield"] = 0
+                defender["crit_boost"] = 0
+                defender["vulnerable"] = 0
+
+                await asyncio.sleep(1.5)
+
+            # Process defenders who weren't attacked (they just wait)
+            for user_id in alive:
+                if players[user_id]["hp"] <= 0:
+                    continue
+                action = round_actions.get(user_id)
+                if action == "defense":
+                    # Clear buffs for defenders even if not attacked
+                    player = players[user_id]
+                    player["power_boost"] = player["base_power"]
+                    player["shield"] = 0
+                    player["crit_boost"] = 0
+                    player["vulnerable"] = 0
                     processed.add(target)
                     await asyncio.sleep(1.5)
 
