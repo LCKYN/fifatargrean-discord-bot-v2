@@ -490,18 +490,6 @@ class Points(commands.Cog):
             else:
                 # 45% success normally, 35% if attacking with more than 100 points
                 win_chance = 0.35 if amount > 100 else 0.45
-                
-                # Modify win chance based on target's points
-                if target_points > 1500:
-                    # Attacker has more chance to win against rich targets (+20%)
-                    win_chance += 0.20
-                elif target_points < 500:
-                    # Attacker has less chance to win against poor targets (-20%)
-                    win_chance -= 0.20
-                
-                # Ensure win_chance stays within 0-1 range
-                win_chance = max(0.0, min(1.0, win_chance))
-                
                 success = random.random() < win_chance
 
             if success:
