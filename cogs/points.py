@@ -565,7 +565,7 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                
+
                 # Send result to channel 1456204479203639340
                 attack_channel = self.bot.get_channel(1456204479203639340)
                 if attack_channel:
@@ -575,18 +575,18 @@ class Points(commands.Cog):
                         color=disnake.Color.green(),
                     )
                     await attack_channel.send(embed=embed)
-                
+
                 # If used outside the attack channel, show ephemeral message
                 if inter.channel_id != 1456204479203639340:
                     await inter.response.send_message(
                         f"💥 Attack successful! Check <#{1456204479203639340}> for result.",
                         ephemeral=True,
-                        delete_after=5
+                        delete_after=5,
                     )
                 else:
                     await inter.response.send_message(
                         f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!",
-                        delete_after=5
+                        delete_after=5,
                     )
             else:
                 # Attacker loses points to target
@@ -615,7 +615,7 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                
+
                 # Send result to channel 1456204479203639340
                 attack_channel = self.bot.get_channel(1456204479203639340)
                 if attack_channel:
@@ -632,31 +632,31 @@ class Points(commands.Cog):
                             color=disnake.Color.red(),
                         )
                     await attack_channel.send(embed=embed)
-                
+
                 # If used outside the attack channel, show ephemeral message
                 if inter.channel_id != 1456204479203639340:
                     if target_has_dodge:
                         await inter.response.send_message(
                             f"🛡️ Attack dodged! Check <#{1456204479203639340}> for result.",
                             ephemeral=True,
-                            delete_after=5
+                            delete_after=5,
                         )
                     else:
                         await inter.response.send_message(
                             f"💔 Attack failed! Check <#{1456204479203639340}> for result.",
                             ephemeral=True,
-                            delete_after=5
+                            delete_after=5,
                         )
                 else:
                     if target_has_dodge:
                         await inter.response.send_message(
                             f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!",
-                            delete_after=5
+                            delete_after=5,
                         )
                     else:
                         await inter.response.send_message(
                             f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!",
-                            delete_after=5
+                            delete_after=5,
                         )
 
     @commands.slash_command(
@@ -2151,19 +2151,18 @@ class BegModal(disnake.ui.Modal):
         embed.set_footer(text=f"Beggar ID: {inter.author.id}")
 
         view = BegView(inter.author.id, self.points_cog)
-        
+
         # Always send beg widget to channel 1457064879189004382
         beg_channel = inter.bot.get_channel(1457064879189004382)
         if beg_channel:
             await beg_channel.send(embed=embed, view=view)
             await inter.response.send_message(
                 f"✅ Your beg request has been posted in <#{1457064879189004382}>!",
-                ephemeral=True
+                ephemeral=True,
             )
         else:
             await inter.response.send_message(
-                "❌ Could not find the beg channel.",
-                ephemeral=True
+                "❌ Could not find the beg channel.", ephemeral=True
             )
 
 
