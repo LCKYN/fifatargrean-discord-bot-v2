@@ -576,17 +576,15 @@ class Points(commands.Cog):
                     )
                     await attack_channel.send(embed=embed)
 
-                # If used outside the attack channel, show ephemeral message
+                # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
                     await inter.response.send_message(
-                        f"💥 Attack successful! Check <#{1456204479203639340}> for result.",
-                        ephemeral=True,
+                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!",
                         delete_after=5,
                     )
                 else:
                     await inter.response.send_message(
-                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!",
-                        delete_after=5,
+                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
                     )
             else:
                 # Attacker loses points to target
@@ -633,21 +631,8 @@ class Points(commands.Cog):
                         )
                     await attack_channel.send(embed=embed)
 
-                # If used outside the attack channel, show ephemeral message
+                # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
-                    if target_has_dodge:
-                        await inter.response.send_message(
-                            f"🛡️ Attack dodged! Check <#{1456204479203639340}> for result.",
-                            ephemeral=True,
-                            delete_after=5,
-                        )
-                    else:
-                        await inter.response.send_message(
-                            f"💔 Attack failed! Check <#{1456204479203639340}> for result.",
-                            ephemeral=True,
-                            delete_after=5,
-                        )
-                else:
                     if target_has_dodge:
                         await inter.response.send_message(
                             f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!",
@@ -657,6 +642,15 @@ class Points(commands.Cog):
                         await inter.response.send_message(
                             f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!",
                             delete_after=5,
+                        )
+                else:
+                    if target_has_dodge:
+                        await inter.response.send_message(
+                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
+                        )
+                    else:
+                        await inter.response.send_message(
+                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                         )
 
     @commands.slash_command(
