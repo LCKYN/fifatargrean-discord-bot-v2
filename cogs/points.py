@@ -565,9 +565,29 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                await inter.response.send_message(
-                    f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
-                )
+                
+                # Send result to channel 1456204479203639340
+                attack_channel = self.bot.get_channel(1456204479203639340)
+                if attack_channel:
+                    embed = disnake.Embed(
+                        title="💥 Attack Successful!",
+                        description=f"{inter.author.mention} stole **{amount} {Config.POINT_NAME}** from {target.mention}!",
+                        color=disnake.Color.green(),
+                    )
+                    await attack_channel.send(embed=embed)
+                
+                # If used outside the attack channel, show ephemeral message
+                if inter.channel_id != 1456204479203639340:
+                    await inter.response.send_message(
+                        f"💥 Attack successful! Check <#{1456204479203639340}> for result.",
+                        ephemeral=True,
+                        delete_after=5
+                    )
+                else:
+                    await inter.response.send_message(
+                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!",
+                        delete_after=5
+                    )
             else:
                 # Attacker loses points to target
                 await conn.execute(
@@ -595,14 +615,49 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                if target_has_dodge:
-                    await inter.response.send_message(
-                        f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
-                    )
+                
+                # Send result to channel 1456204479203639340
+                attack_channel = self.bot.get_channel(1456204479203639340)
+                if attack_channel:
+                    if target_has_dodge:
+                        embed = disnake.Embed(
+                            title="🛡️ Attack Dodged!",
+                            description=f"{target.mention} dodged {inter.author.mention}'s attack! {inter.author.mention} lost **{amount} {Config.POINT_NAME}**!",
+                            color=disnake.Color.blue(),
+                        )
+                    else:
+                        embed = disnake.Embed(
+                            title="💔 Attack Failed!",
+                            description=f"{inter.author.mention} failed to attack {target.mention} and lost **{amount} {Config.POINT_NAME}**!",
+                            color=disnake.Color.red(),
+                        )
+                    await attack_channel.send(embed=embed)
+                
+                # If used outside the attack channel, show ephemeral message
+                if inter.channel_id != 1456204479203639340:
+                    if target_has_dodge:
+                        await inter.response.send_message(
+                            f"🛡️ Attack dodged! Check <#{1456204479203639340}> for result.",
+                            ephemeral=True,
+                            delete_after=5
+                        )
+                    else:
+                        await inter.response.send_message(
+                            f"💔 Attack failed! Check <#{1456204479203639340}> for result.",
+                            ephemeral=True,
+                            delete_after=5
+                        )
                 else:
-                    await inter.response.send_message(
-                        f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
-                    )
+                    if target_has_dodge:
+                        await inter.response.send_message(
+                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!",
+                            delete_after=5
+                        )
+                    else:
+                        await inter.response.send_message(
+                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!",
+                            delete_after=5
+                        )
 
     @commands.slash_command(
         description="Pierce attack - 100% success vs dodge, 100% fail otherwise"
@@ -1472,7 +1527,7 @@ class Points(commands.Cog):
         async with db.pool.acquire() as conn:
             # Get all user points
             rows = await conn.fetch("SELECT points FROM users ORDER BY points")
-            
+
             if not rows:
                 await inter.followup.send("No users found in database.", ephemeral=True)
                 return
@@ -1481,9 +1536,17 @@ class Points(commands.Cog):
             total_users = len(points_list)
 
             # Calculate statistics
-            q1 = statistics.quantiles(points_list, n=4)[0] if len(points_list) >= 2 else points_list[0]
+            q1 = (
+                statistics.quantiles(points_list, n=4)[0]
+                if len(points_list) >= 2
+                else points_list[0]
+            )
             q2 = statistics.median(points_list)
-            q3 = statistics.quantiles(points_list, n=4)[2] if len(points_list) >= 2 else points_list[-1]
+            q3 = (
+                statistics.quantiles(points_list, n=4)[2]
+                if len(points_list) >= 2
+                else points_list[-1]
+            )
             mean = statistics.mean(points_list)
 
             # Create distribution bins of 500
@@ -1494,7 +1557,9 @@ class Points(commands.Cog):
                 distribution[bin_key] = distribution.get(bin_key, 0) + 1
 
             # Sort bins by starting value
-            sorted_bins = sorted(distribution.items(), key=lambda x: int(x[0].split('-')[0]))
+            sorted_bins = sorted(
+                distribution.items(), key=lambda x: int(x[0].split("-")[0])
+            )
 
             # Create embed
             embed = disnake.Embed(
@@ -1506,10 +1571,10 @@ class Points(commands.Cog):
             embed.add_field(
                 name="Statistics",
                 value=f"**Mean:** {mean:.2f}\n"
-                      f"**Q1:** {q1:.2f}\n"
-                      f"**Q2 (Median):** {q2:.2f}\n"
-                      f"**Q3:** {q3:.2f}",
-                inline=False
+                f"**Q1:** {q1:.2f}\n"
+                f"**Q2 (Median):** {q2:.2f}\n"
+                f"**Q3:** {q3:.2f}",
+                inline=False,
             )
 
             # Add distribution
@@ -1524,26 +1589,28 @@ class Points(commands.Cog):
             if len(dist_text) > 1024:
                 chunks = []
                 current_chunk = ""
-                for line in dist_text.split('\n'):
+                for line in dist_text.split("\n"):
                     if len(current_chunk) + len(line) + 1 > 1024:
                         chunks.append(current_chunk)
-                        current_chunk = line + '\n'
+                        current_chunk = line + "\n"
                     else:
-                        current_chunk += line + '\n'
+                        current_chunk += line + "\n"
                 if current_chunk:
                     chunks.append(current_chunk)
-                
+
                 for i, chunk in enumerate(chunks):
                     embed.add_field(
-                        name=f"Distribution (Part {i+1})" if len(chunks) > 1 else "Distribution",
+                        name=f"Distribution (Part {i + 1})"
+                        if len(chunks) > 1
+                        else "Distribution",
                         value=chunk,
-                        inline=False
+                        inline=False,
                     )
             else:
                 embed.add_field(
                     name="Distribution",
                     value=dist_text if dist_text else "No data",
-                    inline=False
+                    inline=False,
                 )
 
             await inter.followup.send(embed=embed)
@@ -2084,7 +2151,20 @@ class BegModal(disnake.ui.Modal):
         embed.set_footer(text=f"Beggar ID: {inter.author.id}")
 
         view = BegView(inter.author.id, self.points_cog)
-        await inter.response.send_message(embed=embed, view=view)
+        
+        # Always send beg widget to channel 1457064879189004382
+        beg_channel = inter.bot.get_channel(1457064879189004382)
+        if beg_channel:
+            await beg_channel.send(embed=embed, view=view)
+            await inter.response.send_message(
+                f"✅ Your beg request has been posted in <#{1457064879189004382}>!",
+                ephemeral=True
+            )
+        else:
+            await inter.response.send_message(
+                "❌ Could not find the beg channel.",
+                ephemeral=True
+            )
 
 
 class BegView(disnake.ui.View):
