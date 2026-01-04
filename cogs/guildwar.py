@@ -1001,21 +1001,13 @@ class GuildWar(commands.Cog):
 
             # Process each attack
             for attacker_id, target_id in attackers:
-                # Skip if attacker is dead, but allow attacks on dead targets to show
-                if players[attacker_id]["hp"] <= 0:
+                # Skip if attacker or target is already dead
+                if players[attacker_id]["hp"] <= 0 or players[target_id]["hp"] <= 0:
                     continue
 
                 attacker = players[attacker_id]
                 defender = players[target_id]
                 target_action = round_actions.get(target_id, "attack")
-                
-                # If target is already dead, show attack but skip damage
-                if players[target_id]["hp"] <= 0:
-                    await thread.send(
-                        f"⚔️ {format_user(attacker_id)} attacks {format_user(target_id)}, but they're already defeated!"
-                    )
-                    await asyncio.sleep(1)
-                    continue
 
                 # Check for perfect strike (1% chance)
                 if random.random() < 0.01:
