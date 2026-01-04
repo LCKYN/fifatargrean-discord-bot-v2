@@ -163,6 +163,10 @@ class Points(commands.Cog):
                     # 40% chance for bad luck (0 points)
                     if random.random() < 0.40:
                         points_to_add = 0
+                else:  # current_points >= 1500
+                    # 70% chance for bad luck (0 points) - rich tax
+                    if random.random() < 0.70:
+                        points_to_add = 0
 
                 if points_to_add <= 0:
                     # Update last_message_at and daily_earned even if 0 points (bad luck still counts toward cap)
@@ -269,19 +273,22 @@ class Points(commands.Cog):
                         member = message.guild.get_member(message.author.id)
                         if member and penalty_role not in member.roles:
                             await member.add_roles(penalty_role)
-                            
+
                             # Schedule role removal after 1440 minutes (24 hours)
                             import asyncio
+
                             async def remove_role_later():
-                                await asyncio.sleep(1440 * 60)  # 1440 minutes in seconds
+                                await asyncio.sleep(
+                                    1440 * 60
+                                )  # 1440 minutes in seconds
                                 try:
                                     if penalty_role in member.roles:
                                         await member.remove_roles(penalty_role)
                                 except:
                                     pass
-                            
+
                             asyncio.create_task(remove_role_later())
-                    
+
                     # Remove the trap after triggered
                     del channel_traps[trigger_text]
                     if not channel_traps:
