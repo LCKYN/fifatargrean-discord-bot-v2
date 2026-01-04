@@ -45,21 +45,22 @@ class Points(commands.Cog):
             )
 
             if not existing:
-                # First time user - give 1000 points
-                await conn.execute(
-                    "INSERT INTO users (user_id, points) VALUES ($1, 1000)",
+                # First time user - give 1000 points (use ON CONFLICT to prevent duplicates)
+                inserted = await conn.execute(
+                    "INSERT INTO users (user_id, points) VALUES ($1, 1000) ON CONFLICT (user_id) DO NOTHING",
                     member.id,
                 )
 
-                # Send welcome message to bot channel
-                channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
-                if channel:
-                    embed = disnake.Embed(
-                        title="🎉 Welcome Bonus!",
-                        description=f"Welcome {member.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
-                        color=disnake.Color.green(),
-                    )
-                    await channel.send(embed=embed)
+                # Send welcome message to bot channel only if actually inserted
+                if inserted == "INSERT 0 1":
+                    channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+                    if channel:
+                        embed = disnake.Embed(
+                            title="🎉 Welcome Bonus!",
+                            description=f"Welcome {member.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
+                            color=disnake.Color.green(),
+                        )
+                        await channel.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -91,22 +92,23 @@ class Points(commands.Cog):
                 is_first_of_day = True
                 current_points = 0
                 daily_earned = 0  # Start at 0, bonus doesn't count
-                await conn.execute(
-                    "INSERT INTO users (user_id, points, last_message_at, daily_earned, daily_earned_date) VALUES ($1, $2, $3, 0, $4)",
+                inserted = await conn.execute(
+                    "INSERT INTO users (user_id, points, last_message_at, daily_earned, daily_earned_date) VALUES ($1, $2, $3, 0, $4) ON CONFLICT (user_id) DO NOTHING",
                     message.author.id,
                     points_to_add,
                     now,
                     today_bangkok,
                 )
 
-                # Send welcome message
-                channel = message.channel
-                embed = disnake.Embed(
-                    title="🎉 Welcome Bonus!",
-                    description=f"Welcome {message.author.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
-                    color=disnake.Color.green(),
-                )
-                await channel.send(embed=embed, delete_after=10)
+                # Send welcome message only if actually inserted
+                if inserted == "INSERT 0 1":
+                    channel = message.channel
+                    embed = disnake.Embed(
+                        title="🎉 Welcome Bonus!",
+                        description=f"Welcome {message.author.mention}! You received **1000 {Config.POINT_NAME}** as a welcome gift!",
+                        color=disnake.Color.green(),
+                    )
+                    await channel.send(embed=embed, delete_after=10)
             else:
                 last_msg = user["last_message_at"]
                 current_points = user["points"] or 0
