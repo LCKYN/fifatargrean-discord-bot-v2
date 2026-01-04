@@ -1,5 +1,6 @@
 import datetime
 import random
+import statistics
 from datetime import timedelta, timezone
 
 import disnake
@@ -1455,6 +1456,97 @@ class Points(commands.Cog):
             f"Removed {actual_removed} {Config.POINT_NAME} from {user.display_name} ({current_points} → {new_points})",
             ephemeral=True,
         )
+
+    @commands.slash_command(description="[MOD] Show point statistics and distribution")
+    async def pointanalysis(self, inter: disnake.ApplicationCommandInteraction):
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        await inter.response.defer()
+
+        async with db.pool.acquire() as conn:
+            # Get all user points
+            rows = await conn.fetch("SELECT points FROM users ORDER BY points")
+            
+            if not rows:
+                await inter.followup.send("No users found in database.", ephemeral=True)
+                return
+
+            points_list = [row["points"] for row in rows]
+            total_users = len(points_list)
+
+            # Calculate statistics
+            q1 = statistics.quantiles(points_list, n=4)[0] if len(points_list) >= 2 else points_list[0]
+            q2 = statistics.median(points_list)
+            q3 = statistics.quantiles(points_list, n=4)[2] if len(points_list) >= 2 else points_list[-1]
+            mean = statistics.mean(points_list)
+
+            # Create distribution bins of 500
+            distribution = {}
+            for points in points_list:
+                bin_start = (points // 500) * 500
+                bin_key = f"{bin_start}-{bin_start + 499}"
+                distribution[bin_key] = distribution.get(bin_key, 0) + 1
+
+            # Sort bins by starting value
+            sorted_bins = sorted(distribution.items(), key=lambda x: int(x[0].split('-')[0]))
+
+            # Create embed
+            embed = disnake.Embed(
+                title=f"📊 Point Analysis ({total_users} users)",
+                color=disnake.Color.blue(),
+            )
+
+            # Add statistics
+            embed.add_field(
+                name="Statistics",
+                value=f"**Mean:** {mean:.2f}\n"
+                      f"**Q1:** {q1:.2f}\n"
+                      f"**Q2 (Median):** {q2:.2f}\n"
+                      f"**Q3:** {q3:.2f}",
+                inline=False
+            )
+
+            # Add distribution
+            dist_text = ""
+            for bin_range, count in sorted_bins:
+                percentage = (count / total_users) * 100
+                bar_length = int(percentage / 2)  # Scale to max 50 chars
+                bar = "█" * bar_length
+                dist_text += f"`{bin_range:>13}` │ {bar} {count} ({percentage:.1f}%)\n"
+
+            # Split distribution if too long
+            if len(dist_text) > 1024:
+                chunks = []
+                current_chunk = ""
+                for line in dist_text.split('\n'):
+                    if len(current_chunk) + len(line) + 1 > 1024:
+                        chunks.append(current_chunk)
+                        current_chunk = line + '\n'
+                    else:
+                        current_chunk += line + '\n'
+                if current_chunk:
+                    chunks.append(current_chunk)
+                
+                for i, chunk in enumerate(chunks):
+                    embed.add_field(
+                        name=f"Distribution (Part {i+1})" if len(chunks) > 1 else "Distribution",
+                        value=chunk,
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name="Distribution",
+                    value=dist_text if dist_text else "No data",
+                    inline=False
+                )
+
+            await inter.followup.send(embed=embed)
 
     @commands.slash_command(description="Send points to another user (10% tax)")
     async def sendpoint(
