@@ -226,21 +226,21 @@ class Points(commands.Cog):
             trigger_text, creator_id = triggered_trap
 
             async with db.pool.acquire() as conn:
-                # Check if victim has at least 50 points
+                # Check if victim has at least 200 points
                 victim_points = await conn.fetchval(
                     "SELECT points FROM users WHERE user_id = $1", message.author.id
                 )
                 victim_points = victim_points or 0
 
-                if victim_points >= 50:
-                    # Steal 50 points from victim and give to trap creator
+                if victim_points >= 200:
+                    # Steal 200 points from victim and give to trap creator
                     await conn.execute(
-                        "UPDATE users SET points = points - 50 WHERE user_id = $1",
+                        "UPDATE users SET points = points - 200 WHERE user_id = $1",
                         message.author.id,
                     )
                     await conn.execute(
-                        """INSERT INTO users (user_id, points) VALUES ($1, 50)
-                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 50""",
+                        """INSERT INTO users (user_id, points) VALUES ($1, 200)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 200""",
                         creator_id,
                     )
 
@@ -255,7 +255,40 @@ class Points(commands.Cog):
                         creator.display_name if creator else f"User {creator_id}"
                     )
                     await message.reply(
-                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 50 {Config.POINT_NAME}!"
+                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** and lost 200 {Config.POINT_NAME}!"
+                    )
+                else:
+                    # Victim doesn't have enough points - add role for 1440 minutes
+                    penalty_role = message.guild.get_role(1456114946764181557)
+                    if penalty_role:
+                        member = message.guild.get_member(message.author.id)
+                        if member and penalty_role not in member.roles:
+                            await member.add_roles(penalty_role)
+                            
+                            # Schedule role removal after 1440 minutes (24 hours)
+                            import asyncio
+                            async def remove_role_later():
+                                await asyncio.sleep(1440 * 60)  # 1440 minutes in seconds
+                                try:
+                                    if penalty_role in member.roles:
+                                        await member.remove_roles(penalty_role)
+                                except:
+                                    pass
+                            
+                            asyncio.create_task(remove_role_later())
+                    
+                    # Remove the trap after triggered
+                    del channel_traps[trigger_text]
+                    if not channel_traps:
+                        del self.active_traps[message.channel.id]
+
+                    # Notify about trap and penalty
+                    creator = message.guild.get_member(creator_id)
+                    creator_name = (
+                        creator.display_name if creator else f"User {creator_id}"
+                    )
+                    await message.reply(
+                        f"💣 **TRAP ACTIVATED!** {message.author.mention} triggered a trap set by **{creator_name}** but doesn't have enough points! Penalty role added for 24 hours!"
                     )
 
     @commands.slash_command(description="Set a trap with a trigger word")
@@ -287,23 +320,23 @@ class Points(commands.Cog):
 
         trigger_lower = trigger.lower()
 
-        # Check if user has at least 10 points to set a trap (cost)
+        # Check if user has at least 40 points to set a trap (cost)
         async with db.pool.acquire() as conn:
             user_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", inter.author.id
             )
             user_points = user_points or 0
 
-            if user_points < 10:
+            if user_points < 40:
                 await inter.response.send_message(
-                    f"You need at least 10 {Config.POINT_NAME} to set a trap.",
+                    f"You need at least 40 {Config.POINT_NAME} to set a trap.",
                     ephemeral=True,
                 )
                 return
 
-            # Deduct 10 points for setting trap
+            # Deduct 40 points for setting trap
             await conn.execute(
-                "UPDATE users SET points = points - 10 WHERE user_id = $1",
+                "UPDATE users SET points = points - 40 WHERE user_id = $1",
                 inter.author.id,
             )
 
@@ -331,7 +364,7 @@ class Points(commands.Cog):
         self.trap_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f'💣 Trap set! (-10 {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 15 minutes will lose 50 {Config.POINT_NAME} to you!',
+            f'💣 Trap set! (-40 {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 15 minutes will lose 200 {Config.POINT_NAME} to you!',
             ephemeral=True,
         )
 
@@ -2122,7 +2155,9 @@ class AttackBeggarModal(disnake.ui.Modal):
         user_id = inter.user.id
 
         if user_id in self.points_cog.beg_attack_cooldowns:
-            time_passed = (now - self.points_cog.beg_attack_cooldowns[user_id]).total_seconds()
+            time_passed = (
+                now - self.points_cog.beg_attack_cooldowns[user_id]
+            ).total_seconds()
             if time_passed < 60:
                 remaining = 60 - int(time_passed)
                 await inter.response.send_message(
