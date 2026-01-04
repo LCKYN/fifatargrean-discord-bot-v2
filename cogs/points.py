@@ -1289,8 +1289,6 @@ class Points(commands.Cog):
 
     @commands.slash_command(description="Show all available roles and prices")
     async def shop(self, inter: disnake.ApplicationCommandInteraction):
-        channel = inter.channel
-
         # Build role list from database
         role_prices = await self.get_shop_roles()
         role_items = []
@@ -1316,19 +1314,33 @@ class Points(commands.Cog):
             for i in range(0, len(role_items), chunk_size)
         ]
 
-        await inter.response.defer()
-
-        for idx, chunk in enumerate(chunks):
-            embed = disnake.Embed(
-                title=f"🛒 Role Shop"
-                + (f" (Page {idx + 1}/{len(chunks)})" if len(chunks) > 1 else ""),
-                description="\n".join(chunk),
-                color=disnake.Color.blue(),
+        # Get shop channel
+        shop_channel = self.bot.get_channel(956301076271857764)
+        
+        if shop_channel:
+            # Send shop listing to designated channel
+            for idx, chunk in enumerate(chunks):
+                embed = disnake.Embed(
+                    title=f"🛒 Role Shop"
+                    + (f" (Page {idx + 1}/{len(chunks)})" if len(chunks) > 1 else ""),
+                    description="\n".join(chunk),
+                    color=disnake.Color.blue(),
+                )
+                embed.set_footer(
+                    text=f"Use /buyrole @role to purchase • Duration: {Config.ROLE_DURATION_MINUTES} minute(s)"
+                )
+                await shop_channel.send(embed=embed)
+            
+            # Tell user to check the shop channel
+            await inter.response.send_message(
+                f"🛒 Shop listing posted in <#{956301076271857764}>!",
+                ephemeral=True
             )
-            embed.set_footer(
-                text=f"Use /buyrole @role to purchase • Duration: {Config.ROLE_DURATION_MINUTES} minute(s)"
+        else:
+            await inter.response.send_message(
+                "❌ Could not find shop channel.",
+                ephemeral=True
             )
-            await inter.followup.send(embed=embed)
 
     @commands.slash_command(description="Show top 10 leaderboard")
     async def leaderboard(self, inter: disnake.ApplicationCommandInteraction):
