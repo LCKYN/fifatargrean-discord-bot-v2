@@ -139,13 +139,13 @@ class Points(commands.Cog):
                             return
                         points_to_add = 10
 
-                # Check daily cap (400 points per day from chatting)
-                if daily_earned >= 400:
+                # Check daily cap (1000 points per day from chatting)
+                if daily_earned >= 1000:
                     return  # Already hit daily cap
 
                 # Limit points_to_add to not exceed cap
-                if daily_earned + points_to_add > 400:
-                    points_to_add = 400 - daily_earned
+                if daily_earned + points_to_add > 1000:
+                    points_to_add = 1000 - daily_earned
 
                 if points_to_add <= 0:
                     return
@@ -344,7 +344,7 @@ class Points(commands.Cog):
             points = user_data["points"] if user_data else 0
             daily_earned = user_data["daily_earned"] if user_data else 0
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {daily_earned}/400 points earned",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {daily_earned}/1000 points earned",
                 ephemeral=True,
             )
 
@@ -1033,8 +1033,11 @@ class Points(commands.Cog):
         amount: int = commands.Param(
             description="Points to give (default 100)", default=100, ge=1, le=10000
         ),
+        max_users: int = commands.Param(
+            description="Max users who can claim (default 5)", default=5, ge=1, le=100
+        ),
     ):
-        """Mod-only: Start an airdrop where first 5 users can claim points"""
+        """Mod-only: Start an airdrop where users can claim points"""
         # Check if user is a mod
         mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
         if not mod_role or mod_role not in inter.author.roles:
@@ -1047,12 +1050,12 @@ class Points(commands.Cog):
         embed = disnake.Embed(
             title="💸 AIRDROP!",
             description=f"React with 💸 to claim **{amount} {Config.POINT_NAME}**!\n\n"
-            f"• First **5** users only!\n"
+            f"• First **{max_users}** users only!\n"
             f"• < 500 {Config.POINT_NAME}: 50% chance for 2x\n"
             f"• > 1500 {Config.POINT_NAME}: 70% chance for nothing",
             color=disnake.Color.gold(),
         )
-        embed.set_footer(text="0/5 claimed")
+        embed.set_footer(text=f"0/{max_users} claimed")
 
         await inter.response.send_message(embed=embed)
         msg = await inter.original_message()
@@ -1065,6 +1068,7 @@ class Points(commands.Cog):
             "claimed_users": set(),
             "count": 0,
             "amount": amount,
+            "max_users": max_users,
         }
 
     @commands.Cog.listener()
@@ -1089,7 +1093,7 @@ class Points(commands.Cog):
             return
 
         # Check if airdrop is full
-        if airdrop["count"] >= 5:
+        if airdrop["count"] >= airdrop["max_users"]:
             return
 
         # Wait for database
@@ -1139,23 +1143,25 @@ class Points(commands.Cog):
 
                 if result_type == "bad_luck":
                     await channel.send(
-                        f"💸 {user_mention} claimed the airdrop but got **nothing** (bad luck)! [{airdrop['count']}/5]"
+                        f"💸 {user_mention} claimed the airdrop but got **nothing** (bad luck)! [{airdrop['count']}/{airdrop['max_users']}]"
                     )
                 elif result_type == "crit":
                     await channel.send(
-                        f"💸✨ {user_mention} claimed the airdrop with **CRIT** and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/5]"
+                        f"💸✨ {user_mention} claimed the airdrop with **CRIT** and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/{airdrop['max_users']}]"
                     )
                 else:
                     await channel.send(
-                        f"💸 {user_mention} claimed the airdrop and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/5]"
+                        f"💸 {user_mention} claimed the airdrop and got **{points_to_give} {Config.POINT_NAME}**! [{airdrop['count']}/{airdrop['max_users']}]"
                     )
 
                 # Update embed footer if airdrop is full
-                if airdrop["count"] >= 5:
+                if airdrop["count"] >= airdrop["max_users"]:
                     try:
                         msg = await channel.fetch_message(payload.message_id)
                         embed = msg.embeds[0]
-                        embed.set_footer(text="5/5 claimed - AIRDROP ENDED")
+                        embed.set_footer(
+                            text=f"{airdrop['max_users']}/{airdrop['max_users']} claimed - AIRDROP ENDED"
+                        )
                         embed.color = disnake.Color.dark_grey()
                         await msg.edit(embed=embed)
                         # Clean up
@@ -1167,7 +1173,9 @@ class Points(commands.Cog):
                     try:
                         msg = await channel.fetch_message(payload.message_id)
                         embed = msg.embeds[0]
-                        embed.set_footer(text=f"{airdrop['count']}/5 claimed")
+                        embed.set_footer(
+                            text=f"{airdrop['count']}/{airdrop['max_users']} claimed"
+                        )
                         await msg.edit(embed=embed)
                     except:
                         pass
@@ -1645,6 +1653,14 @@ class Points(commands.Cog):
     ):
         target = target or inter.author
 
+        # Check if target is a moderator
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if mod_role and mod_role in target.roles:
+            await inter.response.send_message(
+                "Cannot buy roles for moderators.", ephemeral=True
+            )
+            return
+
         # Get role prices from database
         role_prices = await self.get_shop_roles()
 
@@ -1787,7 +1803,7 @@ class Points(commands.Cog):
         # Points info
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {daily_earned}/400",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {daily_earned}/1000",
             inline=True,
         )
 
@@ -1884,6 +1900,358 @@ class Points(commands.Cog):
 
         embed.set_footer(text=f"User ID: {target.id}")
         await inter.response.send_message(embed=embed)
+
+    @commands.slash_command(description="Create a beg request")
+    async def beg(self, inter: disnake.ApplicationCommandInteraction):
+        """Create a beg request with custom title and text"""
+        modal = BegModal(self)
+        await inter.response.send_modal(modal)
+
+
+class BegModal(disnake.ui.Modal):
+    def __init__(self, points_cog):
+        self.points_cog = points_cog
+        components = [
+            disnake.ui.TextInput(
+                label="Beg Title",
+                placeholder="Enter your beg title",
+                custom_id="beg_title",
+                style=disnake.TextInputStyle.short,
+                max_length=100,
+            ),
+            disnake.ui.TextInput(
+                label="Beg Message",
+                placeholder="Why do you need points?",
+                custom_id="beg_text",
+                style=disnake.TextInputStyle.paragraph,
+                max_length=1000,
+            ),
+        ]
+        super().__init__(title="Create Beg Request", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        title = inter.text_values["beg_title"]
+        text = inter.text_values["beg_text"]
+
+        embed = disnake.Embed(
+            title=f"🙏 {title}",
+            description=text,
+            color=disnake.Color.yellow(),
+        )
+        embed.set_author(
+            name=inter.author.display_name,
+            icon_url=inter.author.display_avatar.url,
+        )
+        embed.set_footer(text=f"Beggar ID: {inter.author.id}")
+
+        view = BegView(inter.author.id, self.points_cog)
+        await inter.response.send_message(embed=embed, view=view)
+
+
+class BegView(disnake.ui.View):
+    def __init__(self, beggar_id: int, points_cog):
+        super().__init__(timeout=None)
+        self.beggar_id = beggar_id
+        self.points_cog = points_cog
+
+    @disnake.ui.button(
+        label="Check Points", style=disnake.ButtonStyle.secondary, emoji="🔍"
+    )
+    async def check_points(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Check how many points the beggar has"""
+        async with db.pool.acquire() as conn:
+            points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", self.beggar_id
+            )
+            points = points or 0
+
+        beggar = inter.guild.get_member(self.beggar_id)
+        beggar_name = beggar.display_name if beggar else f"<@{self.beggar_id}>"
+
+        await inter.response.send_message(
+            f"🔍 {beggar_name} currently has **{points:,} {Config.POINT_NAME}**",
+            ephemeral=True,
+        )
+
+    @disnake.ui.button(
+        label="Give Points", style=disnake.ButtonStyle.success, emoji="💰"
+    )
+    async def give_points(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Give points to the beggar"""
+        if inter.user.id == self.beggar_id:
+            await inter.response.send_message(
+                "You cannot give points to yourself!", ephemeral=True
+            )
+            return
+
+        modal = GivePointsModal(self.beggar_id)
+        await inter.response.send_modal(modal)
+
+    @disnake.ui.button(label="Attack", style=disnake.ButtonStyle.danger, emoji="⚔️")
+    async def attack_beggar(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Attack the beggar instead of helping"""
+        if inter.user.id == self.beggar_id:
+            await inter.response.send_message(
+                "You cannot attack yourself!", ephemeral=True
+            )
+            return
+
+        modal = AttackBeggarModal(self.beggar_id, self.points_cog)
+        await inter.response.send_modal(modal)
+
+    @disnake.ui.button(
+        label="Stop Beg", style=disnake.ButtonStyle.secondary, emoji="🛑"
+    )
+    async def stop_beg(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Stop the beg request (only beggar can do this)"""
+        if inter.user.id != self.beggar_id:
+            await inter.response.send_message(
+                "Only the beggar can stop this request!", ephemeral=True
+            )
+            return
+
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True
+
+        # Update embed to show it's closed
+        embed = inter.message.embeds[0]
+        embed.color = disnake.Color.dark_grey()
+        embed.title = f"🛑 {embed.title.replace('🙏 ', '')} [CLOSED]"
+
+        await inter.response.edit_message(embed=embed, view=self)
+        await inter.followup.send(
+            f"{inter.user.mention} has closed their beg request.", ephemeral=False
+        )
+
+
+class GivePointsModal(disnake.ui.Modal):
+    def __init__(self, beggar_id: int):
+        self.beggar_id = beggar_id
+        components = [
+            disnake.ui.TextInput(
+                label="Amount to Give",
+                placeholder="Enter amount of points",
+                custom_id="amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=10,
+            ),
+        ]
+        super().__init__(title="Give Points", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        try:
+            amount = int(inter.text_values["amount"])
+            if amount <= 0:
+                await inter.response.send_message(
+                    "Amount must be positive!", ephemeral=True
+                )
+                return
+        except ValueError:
+            await inter.response.send_message(
+                "Invalid amount! Please enter a number.", ephemeral=True
+            )
+            return
+
+        async with db.pool.acquire() as conn:
+            # Check giver's points
+            giver_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.user.id
+            )
+            giver_points = giver_points or 0
+
+            if giver_points < amount:
+                await inter.response.send_message(
+                    f"Not enough {Config.POINT_NAME}! You have {giver_points:,}, need {amount:,}.",
+                    ephemeral=True,
+                )
+                return
+
+            # Transfer points
+            await conn.execute(
+                "UPDATE users SET points = points - $1, total_sent = total_sent + $1 WHERE user_id = $2",
+                amount,
+                inter.user.id,
+            )
+            await conn.execute(
+                """INSERT INTO users (user_id, points, total_received) VALUES ($1, $2, $2)
+                   ON CONFLICT (user_id) DO UPDATE
+                   SET points = users.points + $2, total_received = users.total_received + $2""",
+                self.beggar_id,
+                amount,
+            )
+
+        beggar = inter.guild.get_member(self.beggar_id)
+        beggar_name = beggar.display_name if beggar else f"<@{self.beggar_id}>"
+
+        await inter.response.send_message(
+            f"💰 {inter.user.mention} gave **{amount:,} {Config.POINT_NAME}** to {beggar_name}!",
+            ephemeral=False,
+        )
+
+
+class AttackBeggarModal(disnake.ui.Modal):
+    def __init__(self, beggar_id: int, points_cog):
+        self.beggar_id = beggar_id
+        self.points_cog = points_cog
+        components = [
+            disnake.ui.TextInput(
+                label="Attack Amount",
+                placeholder="Enter amount to risk (50-500)",
+                custom_id="amount",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=10,
+            ),
+        ]
+        super().__init__(title="Attack Beggar", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        try:
+            amount = int(inter.text_values["amount"])
+            if amount < 50 or amount > 500:
+                await inter.response.send_message(
+                    "Amount must be between 50 and 500!", ephemeral=True
+                )
+                return
+        except ValueError:
+            await inter.response.send_message(
+                "Invalid amount! Please enter a number.", ephemeral=True
+            )
+            return
+
+        async with db.pool.acquire() as conn:
+            # Check attacker's points
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.user.id
+            )
+            attacker_points = attacker_points or 0
+
+            if attacker_points < amount:
+                await inter.response.send_message(
+                    f"Not enough {Config.POINT_NAME}! You have {attacker_points:,}, need {amount:,}.",
+                    ephemeral=True,
+                )
+                return
+
+            # Get beggar's points
+            beggar_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", self.beggar_id
+            )
+            beggar_points = beggar_points or 0
+
+            # Check beggar has enough points
+            if beggar_points < amount:
+                await inter.response.send_message(
+                    f"Target doesn't have enough {Config.POINT_NAME} (needs {amount:,}).",
+                    ephemeral=True,
+                )
+                return
+
+            # Check if target has active dodge
+            target_has_dodge = False
+            if self.beggar_id in self.points_cog.active_dodges:
+                dodge_time = self.points_cog.active_dodges[self.beggar_id]
+                if (
+                    datetime.datetime.now() - dodge_time
+                ).total_seconds() < 300:  # 5 minutes
+                    target_has_dodge = True
+                    # Remove dodge after use
+                    del self.points_cog.active_dodges[self.beggar_id]
+                else:
+                    # Expired dodge, clean up
+                    del self.points_cog.active_dodges[self.beggar_id]
+
+            if target_has_dodge:
+                # Dodge makes attacker always fail
+                success = False
+            else:
+                # 45% success for ≤100 points, 35% for >100 points
+                win_chance = 0.35 if amount > 100 else 0.45
+                success = random.random() < win_chance
+
+            # Track stats based on amount
+            is_high_stakes = amount > 100
+
+            if success:
+                # Attacker wins - steal the amount
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
+                    inter.user.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
+                    self.beggar_id,
+                )
+
+                # Track attack stats (win)
+                if is_high_stakes:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
+                        inter.user.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
+                        inter.user.id,
+                    )
+
+                beggar = inter.guild.get_member(self.beggar_id)
+                beggar_name = beggar.mention if beggar else f"<@{self.beggar_id}>"
+
+                await inter.response.send_message(
+                    f"💥 **Attack successful!** {inter.user.mention} stole **{amount:,} {Config.POINT_NAME}** from {beggar_name}!",
+                    ephemeral=False,
+                )
+            else:
+                # Attacker loses - lose the amount to target
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    amount,
+                    inter.user.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    amount,
+                    self.beggar_id,
+                )
+
+                # Track attack stats (loss)
+                if is_high_stakes:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
+                        inter.user.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
+                        inter.user.id,
+                    )
+
+                beggar = inter.guild.get_member(self.beggar_id)
+                beggar_name = beggar.mention if beggar else f"<@{self.beggar_id}>"
+
+                if target_has_dodge:
+                    await inter.response.send_message(
+                        f"🛡️ **Attack dodged!** {beggar_name} dodged the attack and {inter.user.mention} lost **{amount:,} {Config.POINT_NAME}**!",
+                        ephemeral=False,
+                    )
+                else:
+                    await inter.response.send_message(
+                        f"💔 **Attack failed!** {inter.user.mention} lost **{amount:,} {Config.POINT_NAME}** to {beggar_name}!",
+                        ephemeral=False,
+                    )
 
 
 def setup(bot):

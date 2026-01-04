@@ -250,6 +250,159 @@ class GuildWarView(disnake.ui.View):
             print(f"Error updating war embed: {e}")
 
 
+class PotionShopView(disnake.ui.View):
+    def __init__(self, war_id: int, team1_name: str, team2_name: str, entry_cost: int, is_active: bool = True):
+        super().__init__(timeout=None)
+        self.war_id = war_id
+        self.entry_cost = entry_cost
+        self.potion_cost = int(entry_cost * 0.2)
+
+        # Team 1 HP Potion
+        team1_hp_button = disnake.ui.Button(
+            label=f"🔵 {team1_name} HP Potion ({self.potion_cost})",
+            style=disnake.ButtonStyle.primary,
+            custom_id=f"potion_{war_id}_team1_hp",
+            disabled=not is_active,
+        )
+        team1_hp_button.callback = lambda i: self.buy_potion(i, 1, "hp")
+        self.add_item(team1_hp_button)
+
+        # Team 2 HP Potion
+        team2_hp_button = disnake.ui.Button(
+            label=f"🔴 {team2_name} HP Potion ({self.potion_cost})",
+            style=disnake.ButtonStyle.danger,
+            custom_id=f"potion_{war_id}_team2_hp",
+            disabled=not is_active,
+        )
+        team2_hp_button.callback = lambda i: self.buy_potion(i, 2, "hp")
+        self.add_item(team2_hp_button)
+
+        # Team 1 ATK Potion
+        team1_atk_button = disnake.ui.Button(
+            label=f"🔵 {team1_name} ATK Potion ({self.potion_cost})",
+            style=disnake.ButtonStyle.primary,
+            custom_id=f"potion_{war_id}_team1_atk",
+            disabled=not is_active,
+        )
+        team1_atk_button.callback = lambda i: self.buy_potion(i, 1, "atk")
+        self.add_item(team1_atk_button)
+
+        # Team 2 ATK Potion
+        team2_atk_button = disnake.ui.Button(
+            label=f"🔴 {team2_name} ATK Potion ({self.potion_cost})",
+            style=disnake.ButtonStyle.danger,
+            custom_id=f"potion_{war_id}_team2_atk",
+            disabled=not is_active,
+        )
+        team2_atk_button.callback = lambda i: self.buy_potion(i, 2, "atk")
+        self.add_item(team2_atk_button)
+
+    async def buy_potion(self, interaction: disnake.MessageInteraction, team: int, potion_type: str):
+        user_id = interaction.author.id
+
+        async with db.pool.acquire() as conn:
+            # Get war details
+            war = await conn.fetchrow(
+                "SELECT * FROM guild_wars WHERE id = $1", self.war_id
+            )
+
+            if not war:
+                await interaction.response.send_message(
+                    "This war no longer exists.", ephemeral=True
+                )
+                return
+
+            if war["status"] != "recruiting":
+                await interaction.response.send_message(
+                    "Cannot buy potions after war has started.", ephemeral=True
+                )
+                return
+
+            # Check user points
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", user_id
+            )
+            user_points = user_points or 0
+
+            if user_points < self.potion_cost:
+                await interaction.response.send_message(
+                    f"You need {self.potion_cost} {Config.POINT_NAME} to buy a potion.",
+                    ephemeral=True,
+                )
+                return
+
+            # Check potion limit
+            column_name = f"team{team}_{potion_type}_potions"
+            current_potions = war[column_name] or 0
+
+            if current_potions >= 3:
+                await interaction.response.send_message(
+                    f"This team already has the maximum (3) {potion_type.upper()} potions!",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct points and add potion
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                self.potion_cost,
+                user_id,
+            )
+
+            await conn.execute(
+                f"UPDATE guild_wars SET {column_name} = {column_name} + 1 WHERE id = $1",
+                self.war_id,
+            )
+
+            team_name = war["team1_name"] if team == 1 else war["team2_name"]
+            potion_emoji = "💚" if potion_type == "hp" else "⚔️"
+
+            await interaction.response.send_message(
+                f"{potion_emoji} You bought a {potion_type.upper()} potion for **{team_name}**! (-{self.potion_cost} {Config.POINT_NAME})",
+                ephemeral=True,
+            )
+
+            # Update embed
+            await self.update_potion_embed(interaction)
+
+    async def update_potion_embed(self, interaction: disnake.MessageInteraction):
+        try:
+            async with db.pool.acquire() as conn:
+                war = await conn.fetchrow(
+                    "SELECT * FROM guild_wars WHERE id = $1", self.war_id
+                )
+
+                embed = disnake.Embed(
+                    title="🧪 Potion Shop",
+                    description=f"Buy potions for your team! Each potion costs **{self.potion_cost} {Config.POINT_NAME}**\\n"
+                                f"*HP Potions: +20 HP per potion*\\n"
+                                f"*ATK Potions: +10 ATK per potion*\\n"
+                                f"*Max 3 of each type per team*",
+                    color=disnake.Color.purple(),
+                )
+
+                team1_hp = war["team1_hp_potions"] or 0
+                team1_atk = war["team1_atk_potions"] or 0
+                team2_hp = war["team2_hp_potions"] or 0
+                team2_atk = war["team2_atk_potions"] or 0
+
+                embed.add_field(
+                    name=f"🔵 {war['team1_name']}",
+                    value=f"💚 HP: {team1_hp}/3\\n⚔️ ATK: {team1_atk}/3",
+                    inline=True,
+                )
+
+                embed.add_field(
+                    name=f"🔴 {war['team2_name']}",
+                    value=f"💚 HP: {team2_hp}/3\\n⚔️ ATK: {team2_atk}/3",
+                    inline=True,
+                )
+
+                await interaction.message.edit(embed=embed)
+        except Exception as e:
+            print(f"Error updating potion embed: {e}")
+
+
 class CreateWarModal(disnake.ui.Modal):
     def __init__(self, bot):
         self.bot = bot
@@ -355,12 +508,38 @@ class CreateWarModal(disnake.ui.Modal):
         view = GuildWarView(war_id, team1_name, team2_name, is_active=True)
         message = await thread.send(embed=embed, view=view)
 
+        # Create potion shop embed and view
+        potion_embed = disnake.Embed(
+            title="🧪 Potion Shop",
+            description=f"Buy potions for your team! Each potion costs **{int(entry_cost * 0.2)} {Config.POINT_NAME}**\n"
+                        f"*HP Potions: +20 HP per potion*\n"
+                        f"*ATK Potions: +10 ATK per potion*\n"
+                        f"*Max 3 of each type per team*",
+            color=disnake.Color.purple(),
+        )
+
+        potion_embed.add_field(
+            name=f"🔵 {team1_name}",
+            value=f"💚 HP: 0/3\n⚔️ ATK: 0/3",
+            inline=True,
+        )
+
+        potion_embed.add_field(
+            name=f"🔴 {team2_name}",
+            value=f"💚 HP: 0/3\n⚔️ ATK: 0/3",
+            inline=True,
+        )
+
+        potion_view = PotionShopView(war_id, team1_name, team2_name, entry_cost, is_active=True)
+        potion_message = await thread.send(embed=potion_embed, view=potion_view)
+
         # Update database with thread and message IDs
         async with db.pool.acquire() as conn:
             await conn.execute(
-                "UPDATE guild_wars SET thread_id = $1, message_id = $2 WHERE id = $3",
+                "UPDATE guild_wars SET thread_id = $1, message_id = $2, potion_message_id = $3 WHERE id = $4",
                 thread.id,
                 message.id,
+                potion_message.id,
                 war_id,
             )
 
@@ -545,6 +724,18 @@ class GuildWar(commands.Cog):
 
     async def simulate_battle(self, thread, war, team1_members, team2_members):
         """Simulate the guild war battle with HP and attack/defense mechanics"""
+        # Get potion bonuses
+        team1_hp_potions = war.get("team1_hp_potions") or 0
+        team1_atk_potions = war.get("team1_atk_potions") or 0
+        team2_hp_potions = war.get("team2_hp_potions") or 0
+        team2_atk_potions = war.get("team2_atk_potions") or 0
+
+        # Calculate bonuses (20 HP per potion, 10 ATK per potion)
+        team1_hp_bonus = team1_hp_potions * 20
+        team1_atk_bonus = team1_atk_potions * 10
+        team2_hp_bonus = team2_hp_potions * 20
+        team2_atk_bonus = team2_atk_potions * 10
+
         # Initialize player stats
         players = {}
         team1_ids = []
@@ -553,30 +744,32 @@ class GuildWar(commands.Cog):
         for member in team1_members:
             user_id = member["user_id"]
             players[user_id] = {
-                "hp": 100,
+                "hp": 100 + team1_hp_bonus,
                 "team": 1,
                 "forced_attack": False,
                 "dodge_active": False,
-                "power_boost": 0,  # Extra damage
+                "power_boost": team1_atk_bonus,  # Extra damage from potions
                 "shield": 0,  # Damage reduction %
                 "crit_boost": 0,  # Extra crit chance
                 "vulnerable": 0,  # Extra damage taken %
                 "stunned": False,  # Skip turn
+                "base_power": team1_atk_bonus,  # Store permanent attack bonus
             }
             team1_ids.append(user_id)
 
         for member in team2_members:
             user_id = member["user_id"]
             players[user_id] = {
-                "hp": 100,
+                "hp": 100 + team2_hp_bonus,
                 "team": 2,
                 "forced_attack": False,
                 "dodge_active": False,
-                "power_boost": 0,
+                "power_boost": team2_atk_bonus,
                 "shield": 0,
                 "crit_boost": 0,
                 "vulnerable": 0,
                 "stunned": False,
+                "base_power": team2_atk_bonus,  # Store permanent attack bonus
             }
             team2_ids.append(user_id)
 
@@ -661,7 +854,7 @@ class GuildWar(commands.Cog):
                         )
                         round_actions[user_id] = "run_away"
                     elif event_type == "weaken":
-                        player["power_boost"] = -10
+                        player["power_boost"] = player["base_power"] - 10
                         await thread.send(
                             f"💔 {format_user(user_id)} is weakened! -10 damage this round!"
                         )
@@ -687,7 +880,7 @@ class GuildWar(commands.Cog):
                         )
                         round_actions[user_id] = "dodge_prep"
                     elif event_type == "power_up":
-                        player["power_boost"] = 20
+                        player["power_boost"] = player["base_power"] + 20
                         await thread.send(
                             f"💪 {format_user(user_id)} powers up! +20 damage this round!"
                         )
@@ -712,7 +905,7 @@ class GuildWar(commands.Cog):
                         )
                         round_actions[user_id] = "healed"
                     elif event_type == "berserk":
-                        player["power_boost"] = 25
+                        player["power_boost"] = player["base_power"] + 25
                         player["vulnerable"] = 25
                         await thread.send(
                             f"😤 {format_user(user_id)} goes berserk! +25 damage but +25% damage taken!"
@@ -731,7 +924,7 @@ class GuildWar(commands.Cog):
                     "vulnerable",
                     "berserk",
                 ]:
-                    player["power_boost"] = 0
+                    player["power_boost"] = player["base_power"]
                     player["shield"] = 0
                     player["crit_boost"] = 0
                     player["vulnerable"] = 0
@@ -975,11 +1168,11 @@ class GuildWar(commands.Cog):
                         )
 
                     # Clear one-round buffs/debuffs after combat
-                    attacker["power_boost"] = 0
+                    attacker["power_boost"] = attacker["base_power"]
                     attacker["shield"] = 0
                     attacker["crit_boost"] = 0
                     attacker["vulnerable"] = 0
-                    defender["power_boost"] = 0
+                    defender["power_boost"] = defender["base_power"]
                     defender["shield"] = 0
                     defender["crit_boost"] = 0
                     defender["vulnerable"] = 0
