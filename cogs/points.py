@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import random
 import statistics
@@ -579,9 +580,11 @@ class Points(commands.Cog):
                 # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
                     await inter.response.send_message(
-                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!",
-                        delete_after=5,
+                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
                     )
+                    # Delete after 5 seconds
+                    await asyncio.sleep(5)
+                    await inter.delete_original_response()
                 else:
                     await inter.response.send_message(
                         f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
@@ -635,14 +638,15 @@ class Points(commands.Cog):
                 if inter.channel_id != 1456204479203639340:
                     if target_has_dodge:
                         await inter.response.send_message(
-                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!",
-                            delete_after=5,
+                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
                         )
                     else:
                         await inter.response.send_message(
-                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!",
-                            delete_after=5,
+                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
                         )
+                    # Delete after 5 seconds
+                    await asyncio.sleep(5)
+                    await inter.delete_original_response()
                 else:
                     if target_has_dodge:
                         await inter.response.send_message(
