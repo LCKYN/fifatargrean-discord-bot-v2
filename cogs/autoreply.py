@@ -8,17 +8,18 @@ from disnake.ext import commands, tasks
 from core.config import Config
 from core.database import db
 
-DEFAULT_AUTOREPLY_COST = 1000
-DEFAULT_AUTOREPLY_DURATION = 5  # minutes
+DEFAULT_AUTOREPLY_COST = 200
+DEFAULT_AUTOREPLY_DURATION = 2  # minutes
+MAX_REPLIES_PER_TASK = 5
 
 
 class AutoReply(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Store active auto-replies: {(channel_id, user_id): (message_text, expires_at, creator_id)}
+        # Store active auto-replies: {(channel_id, user_id): (message_text, expires_at, creator_id, reply_count)}
         # user_id can be None to target all users in channel
         self.active_replies: Dict[
-            Tuple[int, int | None], Tuple[str, datetime.datetime, int]
+            Tuple[int, int | None], Tuple[str, datetime.datetime, int, int]
         ] = {}
         self.cleanup_expired.start()
 
@@ -33,7 +34,7 @@ class AutoReply(commands.Cog):
             (key, data) for key, data in self.active_replies.items() if now > data[1]
         ]
 
-        for key, (msg_text, expires_at, creator_id) in expired:
+        for key, (msg_text, expires_at, creator_id, reply_count) in expired:
             del self.active_replies[key]
             ch_id, user_id = key
 
@@ -90,15 +91,27 @@ class AutoReply(commands.Cog):
         if not active_key:
             return
 
-        reply_text, expires_at, creator_id = self.active_replies[active_key]
+        reply_text, expires_at, creator_id, reply_count = self.active_replies[active_key]
 
         # Check if expired
         if datetime.datetime.now() > expires_at:
             del self.active_replies[active_key]
             return
 
-        # Send auto-reply
+        # Check if max replies reached
+        if reply_count >= MAX_REPLIES_PER_TASK:
+            del self.active_replies[active_key]
+            return
+
+        # Send auto-reply and increment counter
         await message.reply(reply_text, mention_author=True)
+        
+        # Increment reply count
+        self.active_replies[active_key] = (reply_text, expires_at, creator_id, reply_count + 1)
+        
+        # If reached max replies, delete the auto-reply
+        if reply_count + 1 >= MAX_REPLIES_PER_TASK:
+            del self.active_replies[active_key]
 
     @commands.slash_command(description="Set auto-reply for a user in a channel")
     async def autoreply(
@@ -181,10 +194,10 @@ class AutoReply(commands.Cog):
                     inter.author.id,
                 )
 
-        # Set auto-reply
+        # Set auto-reply with reply counter starting at 0
         expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration)
         key = (channel.id, user.id)
-        self.active_replies[key] = (message, expires_at, inter.author.id)
+        self.active_replies[key] = (message, expires_at, inter.author.id, 0)
 
         embed = disnake.Embed(
             title="🤖 Auto-Reply Activated", color=disnake.Color.green()
@@ -251,7 +264,7 @@ class AutoReply(commands.Cog):
             )
             return
 
-        _, _, creator_id = self.active_replies[key]
+        _, _, creator_id, _ = self.active_replies[key]
 
         # Mods/admins can stop for free
         # Creator can stop for free
