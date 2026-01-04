@@ -376,7 +376,7 @@ class PotionShopView(disnake.ui.View):
                     title="🧪 Potion Shop",
                     description=f"Buy potions for your team! Each potion costs **{self.potion_cost} {Config.POINT_NAME}**\\n"
                                 f"*HP Potions: +20 HP per potion*\\n"
-                                f"*ATK Potions: +10 ATK per potion*\\n"
+                                f"*ATK Potions: +5 ATK per potion*\\n"
                                 f"*Max 3 of each type per team*",
                     color=disnake.Color.purple(),
                 )
@@ -513,7 +513,7 @@ class CreateWarModal(disnake.ui.Modal):
             title="🧪 Potion Shop",
             description=f"Buy potions for your team! Each potion costs **{int(entry_cost * 0.2)} {Config.POINT_NAME}**\n"
                         f"*HP Potions: +20 HP per potion*\n"
-                        f"*ATK Potions: +10 ATK per potion*\n"
+                        f"*ATK Potions: +5 ATK per potion*\n"
                         f"*Max 3 of each type per team*",
             color=disnake.Color.purple(),
         )
@@ -730,11 +730,11 @@ class GuildWar(commands.Cog):
         team2_hp_potions = war.get("team2_hp_potions") or 0
         team2_atk_potions = war.get("team2_atk_potions") or 0
 
-        # Calculate bonuses (20 HP per potion, 10 ATK per potion)
+        # Calculate bonuses (20 HP per potion, 5 ATK per potion)
         team1_hp_bonus = team1_hp_potions * 20
-        team1_atk_bonus = team1_atk_potions * 10
+        team1_atk_bonus = team1_atk_potions * 5
         team2_hp_bonus = team2_hp_potions * 20
-        team2_atk_bonus = team2_atk_potions * 10
+        team2_atk_bonus = team2_atk_potions * 5
 
         # Initialize player stats
         players = {}
@@ -784,8 +784,8 @@ class GuildWar(commands.Cog):
             return f"<@{user_id}> {color} ({hp} HP)"
 
         def apply_damage_variance(damage):
-            """Apply ±20% variance to damage as integer"""
-            variance = random.uniform(-0.20, 0.20)
+            """Apply ±50% variance to damage as integer"""
+            variance = random.uniform(-0.50, 0.50)
             return int(damage * (1 + variance))
 
         def get_alive():
@@ -983,6 +983,9 @@ class GuildWar(commands.Cog):
                         target = random.choice(enemies)
                         attackers.append((user_id, target))
 
+            # Randomize attack order
+            random.shuffle(attackers)
+
             # Process each attack
             for attacker_id, target_id in attackers:
                 if players[attacker_id]["hp"] <= 0 or players[target_id]["hp"] <= 0:
@@ -1013,7 +1016,7 @@ class GuildWar(commands.Cog):
                 defender["dodge_active"] = False  # Remove dodge after being hit
 
                 # Calculate base damage with buffs
-                base_damage = 50 + attacker.get("power_boost", 0)
+                base_damage = 30 + attacker.get("power_boost", 0)
 
                 # Calculate critical hit chance for attacker
                 crit_chance = 0.10 + (attacker.get("crit_boost", 0) / 100)
