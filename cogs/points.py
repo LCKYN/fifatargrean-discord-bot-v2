@@ -955,17 +955,26 @@ class Points(commands.Cog):
 
             if target_has_dodge:
                 # Pierce attack succeeds - target had dodge
-                # Attacker steals points from target
+                # Calculate gains: 5x amount with 5% tax
+                total_gain = amount * 5
+                tax_amount = int(total_gain * 0.05)
+                attacker_gain = total_gain - tax_amount
+                
+                # Attacker gains 5x points (minus tax) from target
                 await conn.execute(
-                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                    amount,
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    attacker_gain,
+                    total_gain,
                     inter.author.id,
                 )
                 await conn.execute(
-                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                    amount,
+                    "UPDATE users SET points = points - $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
+                    total_gain,
                     target.id,
                 )
+
+                # Add tax to pool
+                await self.add_to_tax_pool(conn, tax_amount)
 
                 # Track attack stats (win)
                 if amount > 100:
@@ -981,22 +990,31 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                await inter.response.send_message(
-                    f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and stole {amount} {Config.POINT_NAME}!"
-                )
+                
+                msg = f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and gained {attacker_gain} {Config.POINT_NAME} (5x)"
+                if tax_amount > 0:
+                    msg += f" ({tax_amount} tax)"
+                await inter.response.send_message(msg)
             else:
                 # Pierce attack fails - target didn't have dodge
-                # Attacker loses points to target
+                # Attacker loses 1x amount with 5% tax
+                tax_amount = int(amount * 0.05)
+                target_gain = amount - tax_amount
+                
+                # Attacker loses points, target gains (minus tax)
                 await conn.execute(
-                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                     amount,
                     inter.author.id,
                 )
                 await conn.execute(
                     "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                    amount,
+                    target_gain,
                     target.id,
                 )
+
+                # Add tax to pool
+                await self.add_to_tax_pool(conn, tax_amount)
 
                 # Track attack stats (loss)
                 if amount > 100:
@@ -1012,9 +1030,11 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                await inter.response.send_message(
-                    f"❌ **Pierce failed!** {target.mention} had no dodge and you lost {amount} {Config.POINT_NAME}!"
-                )
+                
+                msg = f"❌ **Pierce failed!** {target.mention} had no dodge and you lost {amount} {Config.POINT_NAME}"
+                if tax_amount > 0:
+                    msg += f" ({tax_amount} tax)"
+                await inter.response.send_message(msg)
 
     @commands.slash_command(description="Test attack simulation (no points changed)")
     async def test_attack(
