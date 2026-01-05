@@ -688,7 +688,7 @@ class Points(commands.Cog):
 
                 # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
-                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
+                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME} from {target.mention}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
                     await inter.response.send_message(msg)
@@ -696,7 +696,7 @@ class Points(commands.Cog):
                     await asyncio.sleep(5)
                     await inter.delete_original_response()
                 else:
-                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
+                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME} from {target.mention}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
                     await inter.response.send_message(msg)
