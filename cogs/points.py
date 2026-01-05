@@ -27,6 +27,8 @@ class Points(commands.Cog):
         self.active_ceasefires = {}  # {user_id: activated_at}
         self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
+
+    def cog_load(self):
         self.daily_tax_task.start()  # Start daily tax collection
 
     def cog_unload(self):
