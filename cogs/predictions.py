@@ -787,7 +787,7 @@ class Predictions(commands.Cog):
                 creator_bonus = int(total_tax * 0.50)
                 if creator_bonus > 0:
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_prediction = profit_prediction + $1 WHERE user_id = $2",
                         creator_bonus,
                         pred["creator_id"],
                     )

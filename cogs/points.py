@@ -431,6 +431,115 @@ class Points(commands.Cog):
         await asyncio.sleep(10)
         await inter.delete_original_response()
 
+    @commands.slash_command(description="[MOD] Manually run daily tax and reset")
+    async def rundaily(self, inter: disnake.ApplicationCommandInteraction):
+        """Manually trigger the daily tax task (mod only)"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "❌ This command is only available to moderators.", ephemeral=True
+            )
+            return
+
+        await inter.response.defer(ephemeral=True)
+
+        if db.pool is None:
+            await inter.followup.send("❌ Database not connected.", ephemeral=True)
+            return
+
+        from datetime import date
+
+        now_bangkok = datetime.datetime.now(BANGKOK_TZ)
+        today_bangkok = now_bangkok.date()
+
+        async with db.pool.acquire() as conn:
+            # Reset cumulative attack gains and defense losses for all users
+            await conn.execute(
+                "UPDATE users SET cumulative_attack_gains = 0, cumulative_defense_losses = 0"
+            )
+
+            # Give 20% interest on stashed points
+            stash_users = await conn.fetch(
+                "SELECT user_id, stashed_points FROM users WHERE stashed_points > 0"
+            )
+
+            total_interest_paid = 0
+            for user_row in stash_users:
+                stashed = user_row["stashed_points"]
+                interest = int(stashed * 0.20)
+
+                # Add interest to stashed points (capped at 2000)
+                new_stashed = min(stashed + interest, 2000)
+                actual_interest = new_stashed - stashed
+
+                if actual_interest > 0:
+                    await conn.execute(
+                        "UPDATE users SET stashed_points = $1 WHERE user_id = $2",
+                        new_stashed,
+                        user_row["user_id"],
+                    )
+                    total_interest_paid += actual_interest
+
+            # Tax all users at 10%
+            all_users = await conn.fetch(
+                "SELECT user_id, points, last_rich_tax_date FROM users WHERE points > 0"
+            )
+
+            total_tax_collected = 0
+            taxed_count = 0
+            for user_row in all_users:
+                # Check if already taxed today
+                last_tax_date = user_row["last_rich_tax_date"]
+                if last_tax_date == today_bangkok:
+                    continue
+
+                user_points = user_row["points"]
+                tax_amount = int(user_points * 0.10)
+
+                # Deduct tax from user
+                await conn.execute(
+                    "UPDATE users SET points = points - $1, last_rich_tax_date = $2 WHERE user_id = $3",
+                    tax_amount,
+                    today_bangkok,
+                    user_row["user_id"],
+                )
+
+                total_tax_collected += tax_amount
+                taxed_count += 1
+
+            # Add to tax pool
+            if total_tax_collected > 0:
+                await self.add_to_tax_pool(conn, total_tax_collected)
+
+        # Send response
+        embed = disnake.Embed(
+            title="✅ Daily Task Executed",
+            description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {taxed_count} users\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users",
+            color=disnake.Color.green(),
+        )
+        embed.add_field(
+            name="Reset Complete",
+            value="All cumulative attack gains and defense losses reset to 0.",
+            inline=False,
+        )
+        await inter.followup.send(embed=embed, ephemeral=True)
+
+        # Also send public notification
+        bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+        if bot_channel:
+            public_embed = disnake.Embed(
+                title="📊 Daily Tax & Interest (Manual)",
+                description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {taxed_count} users (10% tax on all users).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
+                color=disnake.Color.blue(),
+            )
+            public_embed.add_field(
+                name="✅ Also Reset",
+                value="All cumulative attack gains and defense losses have been reset to 0.",
+                inline=False,
+            )
+            await bot_channel.send(embed=public_embed)
+
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
@@ -2936,9 +3045,9 @@ class AttackBeggarModal(disnake.ui.Modal):
         if not self.daily_tax_task.is_running():
             self.daily_tax_task.start()
 
-    @tasks.loop(hours=24)
+    @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=BANGKOK_TZ))
     async def daily_tax_task(self):
-        """Daily task to tax rich users and reset cumulative attack gains"""
+        """Daily task to tax all users and reset cumulative attack gains"""
         if db.pool is None:
             return
 
