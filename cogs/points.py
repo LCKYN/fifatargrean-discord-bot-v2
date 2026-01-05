@@ -1652,8 +1652,9 @@ class Points(commands.Cog):
             title="💸 AIRDROP!",
             description=f"React with 💸 to claim **{amount} {Config.POINT_NAME}**!\n\n"
             f"• First **{max_users}** users only!\n"
+            f"• < 100 {Config.POINT_NAME}: Always 2x!\n"
             f"• < 500 {Config.POINT_NAME}: 50% chance for 2x\n"
-            f"• > 1500 {Config.POINT_NAME}: 70% chance for nothing",
+            f"• > 3000 {Config.POINT_NAME}: 50% nothing, 50% half",
             color=disnake.Color.gold(),
         )
         embed.set_footer(text=f"0/{max_users} claimed")
@@ -1712,11 +1713,18 @@ class Points(commands.Cog):
             result_type = "normal"
 
             # Apply luck mechanics
-            if user_points > 1500:
-                # 70% chance for bad luck (get nothing)
-                if random.random() < 0.70:
+            if user_points < 100:
+                # Always crit (2x)
+                points_to_give *= 2
+                result_type = "crit"
+            elif user_points > 3000:
+                # 50% chance for nothing, 50% chance for half
+                if random.random() < 0.50:
                     points_to_give = 0
                     result_type = "bad_luck"
+                else:
+                    points_to_give = points_to_give // 2
+                    result_type = "half"
             elif user_points < 500:
                 # 50% chance for crit (2x)
                 if random.random() < 0.50:
