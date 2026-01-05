@@ -5,7 +5,7 @@ import statistics
 from datetime import timedelta, timezone
 
 import disnake
-from disnake.ext import commands
+from disnake.ext import commands, tasks
 
 from core.config import Config
 from core.database import db
@@ -27,6 +27,33 @@ class Points(commands.Cog):
         self.active_ceasefires = {}  # {user_id: activated_at}
         self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
+        self.daily_tax_task.start()  # Start daily tax collection
+
+    def cog_unload(self):
+        self.daily_tax_task.cancel()
+
+    async def get_tax_pool(self, conn) -> int:
+        """Get current tax pool amount"""
+        tax = await conn.fetchval(
+            "SELECT value FROM bot_settings WHERE key = 'tax_pool'"
+        )
+        return int(tax) if tax else 0
+
+    async def add_to_tax_pool(self, conn, amount: int):
+        """Add amount to tax pool"""
+        await conn.execute(
+            """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1)
+               ON CONFLICT (key) DO UPDATE SET value = (CAST(bot_settings.value AS INTEGER) + $1)::TEXT""",
+            amount,
+        )
+
+    async def set_tax_pool(self, conn, amount: int):
+        """Set tax pool to specific amount"""
+        await conn.execute(
+            """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1)
+               ON CONFLICT (key) DO UPDATE SET value = $1::TEXT""",
+            amount,
+        )
 
     @commands.Cog.listener()
     async def on_member_join(self, member: disnake.Member):
@@ -383,6 +410,24 @@ class Points(commands.Cog):
             ephemeral=True,
         )
 
+    @commands.slash_command(description="Show current tax pool")
+    async def showtax(self, inter: disnake.ApplicationCommandInteraction):
+        """Display the current tax pool amount"""
+        async with db.pool.acquire() as conn:
+            tax_pool = await self.get_tax_pool(conn)
+
+        embed = disnake.Embed(
+            title="💰 Tax Pool",
+            description=f"Current tax pool: **{tax_pool:,} {Config.POINT_NAME}**",
+            color=disnake.Color.gold(),
+        )
+        embed.add_field(
+            name="ℹ️ Info",
+            value="Tax is collected from:\n• 5% from successful attacks\n• 5% from attack beggar\n• 10% daily tax on rich users (>3000 points)",
+            inline=False,
+        )
+        await inter.response.send_message(embed=embed)
+
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
@@ -544,17 +589,54 @@ class Points(commands.Cog):
                 success = random.random() < win_chance
 
             if success:
-                # Attacker steals points from target
+                # Check cumulative attack gains cap (2000)
+                attacker_cumulative = await conn.fetchval(
+                    "SELECT cumulative_attack_gains FROM users WHERE user_id = $1",
+                    inter.author.id,
+                )
+                attacker_cumulative = attacker_cumulative or 0
+
+                if attacker_cumulative >= 2000:
+                    await inter.response.send_message(
+                        f"⚠️ You've reached your cumulative attack limit of 2000 {Config.POINT_NAME}! Come back tomorrow.",
+                        ephemeral=True,
+                    )
+                    return
+
+                # Apply rich defender penalty (20% more loss if target has >3000 points)
+                actual_amount = amount
+                rich_penalty = 0
+                if target_points > 3000:
+                    rich_penalty = int(amount * 0.20)
+                    actual_amount = amount + rich_penalty
+
+                # Check if attacker would exceed cap
+                if attacker_cumulative + amount > 2000:
+                    amount = 2000 - attacker_cumulative
+                    actual_amount = amount
+                    if target_points > 3000:
+                        rich_penalty = int(amount * 0.20)
+                        actual_amount = amount + rich_penalty
+
+                # Calculate 5% tax
+                tax_amount = int(amount * 0.05)
+                attacker_gain = amount - tax_amount
+
+                # Attacker steals points from target (minus tax)
                 await conn.execute(
-                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    attacker_gain,
                     amount,
                     inter.author.id,
                 )
                 await conn.execute(
                     "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                    amount,
+                    actual_amount,
                     target.id,
                 )
+
+                # Add tax to pool
+                await self.add_to_tax_pool(conn, tax_amount)
 
                 # Track attack stats (win)
                 if amount > 100:
@@ -574,29 +656,41 @@ class Points(commands.Cog):
                 # Send result to channel 1456204479203639340
                 attack_channel = self.bot.get_channel(1456204479203639340)
                 if attack_channel:
+                    description = f"{inter.author.mention} stole **{attacker_gain} {Config.POINT_NAME}** from {target.mention}!"
+                    if tax_amount > 0:
+                        description += f" ({tax_amount} tax collected)"
+                    if rich_penalty > 0:
+                        description += f"\n💎 Rich penalty: {rich_penalty} extra taken!"
+                    
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
-                        description=f"{inter.author.mention} stole **{amount} {Config.POINT_NAME}** from {target.mention}!",
+                        description=description,
                         color=disnake.Color.green(),
                     )
                     await attack_channel.send(embed=embed)
 
                 # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
-                    await inter.response.send_message(
-                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
-                    )
+                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
+                    if tax_amount > 0:
+                        msg += f" ({tax_amount} tax)"
+                    if rich_penalty > 0:
+                        msg += f" +{rich_penalty} rich penalty!"
+                    await inter.response.send_message(msg)
                     # Delete after 5 seconds
                     await asyncio.sleep(5)
                     await inter.delete_original_response()
                 else:
-                    await inter.response.send_message(
-                        f"💥 **Attack successful!** You stole {amount} {Config.POINT_NAME} from {target.mention}!"
-                    )
+                    msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
+                    if tax_amount > 0:
+                        msg += f" ({tax_amount} tax)"
+                    if rich_penalty > 0:
+                        msg += f" +{rich_penalty} rich penalty!"
+                    await inter.response.send_message(msg)
             else:
                 # Attacker loses points to target
                 await conn.execute(
-                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                     amount,
                     inter.author.id,
                 )
@@ -1129,6 +1223,80 @@ class Points(commands.Cog):
             ephemeral=True,
         )
 
+    @commands.slash_command(description="[MOD] Distribute tax pool to all users")
+    async def taxairdrop(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        percentage: int = commands.Param(
+            description="Percentage of tax pool to distribute (1-100)", ge=1, le=100, default=100
+        ),
+    ):
+        """Distribute tax pool equally to all users"""
+        # Check if user is mod
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "Only moderators can distribute tax!", ephemeral=True
+            )
+            return
+
+        await inter.response.defer()
+
+        async with db.pool.acquire() as conn:
+            tax_pool = await self.get_tax_pool(conn)
+
+            if tax_pool <= 0:
+                await inter.followup.send("Tax pool is empty!")
+                return
+
+            # Get all users with points in database
+            users = await conn.fetch("SELECT user_id FROM users WHERE points > 0")
+            
+            if not users:
+                await inter.followup.send("No users found in database!")
+                return
+
+            # Calculate distribution
+            amount_to_distribute = int(tax_pool * (percentage / 100))
+            per_user = amount_to_distribute // len(users)
+
+            if per_user <= 0:
+                await inter.followup.send(
+                    f"Tax pool too small to distribute among {len(users)} users!"
+                )
+                return
+
+            # Distribute to all users
+            for user_row in users:
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    per_user,
+                    user_row["user_id"],
+                )
+
+            # Deduct from tax pool
+            new_tax_pool = tax_pool - amount_to_distribute
+            await self.set_tax_pool(conn, new_tax_pool)
+
+        # Send announcement
+        embed = disnake.Embed(
+            title="💸 Tax Airdrop!",
+            description=f"**{amount_to_distribute:,} {Config.POINT_NAME}** distributed from tax pool!",
+            color=disnake.Color.green(),
+        )
+        embed.add_field(
+            name="Per User",
+            value=f"{per_user:,} {Config.POINT_NAME}",
+            inline=True,
+        )
+        embed.add_field(name="Recipients", value=f"{len(users)} users", inline=True)
+        embed.add_field(
+            name="Remaining Tax Pool",
+            value=f"{new_tax_pool:,} {Config.POINT_NAME}",
+            inline=False,
+        )
+        await inter.followup.send(embed=embed)
+
     @commands.slash_command(description="Start an airdrop for users to claim points")
     async def airdrop(
         self,
@@ -1318,7 +1486,7 @@ class Points(commands.Cog):
 
         # Get shop channel
         shop_channel = self.bot.get_channel(956301076271857764)
-        
+
         if shop_channel:
             # Send shop listing to designated channel
             for idx, chunk in enumerate(chunks):
@@ -1332,16 +1500,14 @@ class Points(commands.Cog):
                     text=f"Use /buyrole @role to purchase • Duration: {Config.ROLE_DURATION_MINUTES} minute(s)"
                 )
                 await shop_channel.send(embed=embed)
-            
+
             # Tell user to check the shop channel
             await inter.response.send_message(
-                f"🛒 Shop listing posted in <#{956301076271857764}>!",
-                ephemeral=True
+                f"🛒 Shop listing posted in <#{956301076271857764}>!", ephemeral=True
             )
         else:
             await inter.response.send_message(
-                "❌ Could not find shop channel.",
-                ephemeral=True
+                "❌ Could not find shop channel.", ephemeral=True
             )
 
     @commands.slash_command(description="Show top 10 leaderboard")
@@ -2119,7 +2285,7 @@ class Points(commands.Cog):
             )
 
         embed.set_footer(text=f"User ID: {target.id}")
-        
+
         # If used in channel 956301076271857764, don't delete
         # If used outside, delete after 30 seconds
         if inter.channel_id != 956301076271857764:
@@ -2447,6 +2613,10 @@ class AttackBeggarModal(disnake.ui.Modal):
 
                 success = random.random() < win_chance
 
+            # Calculate 5% tax on successful attacks
+            tax_amount = 0
+            attacker_gain = amount
+
             # Track stats based on amount
             is_high_stakes = amount > 100
 
@@ -2454,9 +2624,14 @@ class AttackBeggarModal(disnake.ui.Modal):
             self.points_cog.beg_attack_cooldowns[user_id] = now
 
             if success:
-                # Attacker wins - steal the amount
+                # Calculate 5% tax
+                tax_amount = int(amount * 0.05)
+                attacker_gain = amount - tax_amount
+
+                # Attacker wins - steal the amount (minus tax)
                 await conn.execute(
-                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    attacker_gain,
                     amount,
                     inter.user.id,
                 )
@@ -2465,6 +2640,9 @@ class AttackBeggarModal(disnake.ui.Modal):
                     amount,
                     self.beggar_id,
                 )
+
+                # Add tax to pool
+                await self.points_cog.add_to_tax_pool(conn, tax_amount)
 
                 # Track attack stats (win)
                 if is_high_stakes:
@@ -2481,14 +2659,16 @@ class AttackBeggarModal(disnake.ui.Modal):
                 beggar = inter.guild.get_member(self.beggar_id)
                 beggar_name = beggar.mention if beggar else f"<@{self.beggar_id}>"
 
-                await inter.response.send_message(
-                    f"💥 **Attack successful!** {inter.user.mention} stole **{amount:,} {Config.POINT_NAME}** from {beggar_name}!",
-                    ephemeral=False,
-                )
+                msg = f"💥 **Attack successful!** {inter.user.mention} gained **{attacker_gain:,} {Config.POINT_NAME}**"
+                if tax_amount > 0:
+                    msg += f" ({tax_amount} tax collected)"
+                msg += f" from {beggar_name}!"
+                
+                await inter.response.send_message(msg, ephemeral=False)
             else:
                 # Attacker loses - lose the amount to target
                 await conn.execute(
-                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                     amount,
                     inter.user.id,
                 )
@@ -2523,6 +2703,79 @@ class AttackBeggarModal(disnake.ui.Modal):
                         f"💔 **Attack failed!** {inter.user.mention} lost **{amount:,} {Config.POINT_NAME}** to {beggar_name}!",
                         ephemeral=False,
                     )
+
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start the daily tax task when bot is ready"""
+        pass
+
+    @tasks.loop(hours=24)
+    async def daily_tax_task(self):
+        """Daily task to tax rich users and reset cumulative attack gains"""
+        if db.pool is None:
+            return
+
+        from datetime import date
+        now_bangkok = datetime.datetime.now(BANGKOK_TZ)
+        today_bangkok = now_bangkok.date()
+
+        async with db.pool.acquire() as conn:
+            # Reset cumulative attack gains for all users
+            await conn.execute(
+                "UPDATE users SET cumulative_attack_gains = 0"
+            )
+
+            # Tax rich users (>3000 points) at 10%
+            rich_users = await conn.fetch(
+                "SELECT user_id, points, last_rich_tax_date FROM users WHERE points > 3000"
+            )
+
+            total_tax_collected = 0
+            for user_row in rich_users:
+                # Check if already taxed today
+                last_tax_date = user_row["last_rich_tax_date"]
+                if last_tax_date == today_bangkok:
+                    continue
+
+                user_points = user_row["points"]
+                tax_amount = int(user_points * 0.10)
+
+                # Deduct tax from user
+                await conn.execute(
+                    "UPDATE users SET points = points - $1, last_rich_tax_date = $2 WHERE user_id = $3",
+                    tax_amount,
+                    today_bangkok,
+                    user_row["user_id"],
+                )
+
+                total_tax_collected += tax_amount
+
+            # Add to tax pool
+            if total_tax_collected > 0:
+                await self.add_to_tax_pool(conn, total_tax_collected)
+
+                # Send notification
+                bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+                if bot_channel:
+                    embed = disnake.Embed(
+                        title="📊 Daily Rich Tax Collected",
+                        description=f"Collected **{total_tax_collected:,} {Config.POINT_NAME}** from {len(rich_users)} rich users (10% tax on >3000 points).",
+                        color=disnake.Color.blue(),
+                    )
+                    embed.add_field(
+                        name="✅ Also Reset",
+                        value="All cumulative attack gains have been reset to 0.",
+                        inline=False,
+                    )
+                    await bot_channel.send(embed=embed)
+
+    @daily_tax_task.before_loop
+    async def before_daily_tax(self):
+        await self.bot.wait_until_ready()
+        # Wait for db connection
+        while db.pool is None:
+            await asyncio.sleep(1)
 
 
 def setup(bot):

@@ -91,7 +91,9 @@ class AutoReply(commands.Cog):
         if not active_key:
             return
 
-        reply_text, expires_at, creator_id, reply_count = self.active_replies[active_key]
+        reply_text, expires_at, creator_id, reply_count = self.active_replies[
+            active_key
+        ]
 
         # Check if expired
         if datetime.datetime.now() > expires_at:
@@ -105,10 +107,15 @@ class AutoReply(commands.Cog):
 
         # Send auto-reply and increment counter
         await message.reply(reply_text, mention_author=True)
-        
+
         # Increment reply count
-        self.active_replies[active_key] = (reply_text, expires_at, creator_id, reply_count + 1)
-        
+        self.active_replies[active_key] = (
+            reply_text,
+            expires_at,
+            creator_id,
+            reply_count + 1,
+        )
+
         # If reached max replies, delete the auto-reply
         if reply_count + 1 >= MAX_REPLIES_PER_TASK:
             del self.active_replies[active_key]
