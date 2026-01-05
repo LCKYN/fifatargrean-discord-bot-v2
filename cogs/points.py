@@ -435,16 +435,17 @@ class Points(commands.Cog):
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
             user_data = await conn.fetchrow(
-                "SELECT points, daily_earned, cumulative_attack_gains FROM users WHERE user_id = $1",
+                "SELECT points, daily_earned, cumulative_attack_gains, cumulative_defense_losses FROM users WHERE user_id = $1",
                 inter.author.id,
             )
             points = user_data["points"] if user_data else 0
             daily_earned = user_data["daily_earned"] if user_data else 0
             cumulative_attack = user_data["cumulative_attack_gains"] if user_data else 0
+            cumulative_defense = user_data["cumulative_defense_losses"] if user_data else 0
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000",
                 ephemeral=True,
             )
 
@@ -551,10 +552,11 @@ class Points(commands.Cog):
             target_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", target.id
             )
-            
+
             # Check target's cumulative defense losses
             target_defense_losses = await conn.fetchval(
-                "SELECT cumulative_defense_losses FROM users WHERE user_id = $1", target.id
+                "SELECT cumulative_defense_losses FROM users WHERE user_id = $1",
+                target.id,
             )
 
             attacker_points = attacker_points or 0
@@ -575,7 +577,7 @@ class Points(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            
+
             # Check if target has already lost 2000 points today from being attacked
             if target_defense_losses >= 2000:
                 await inter.response.send_message(
@@ -605,9 +607,9 @@ class Points(commands.Cog):
                 # 45% success normally, 35% if attacking with more than 100 points
                 win_chance = 0.35 if amount > 100 else 0.45
 
-                # Rich target bonus: +20% win chance when attacking players with >3000 points
+                # Rich target bonus: +15% win chance when attacking players with >3000 points
                 if target_points > 3000:
-                    win_chance += 0.20
+                    win_chance += 0.15
 
                 # Ensure win_chance stays within 0-1 range
                 win_chance = max(0.0, min(1.0, win_chance))
@@ -705,7 +707,7 @@ class Points(commands.Cog):
                     # Calculate 5% tax on 2x amount
                     tax_amount = int(loss_amount * 0.05)
                     target_gain = loss_amount - tax_amount
-                    
+
                     # Attacker loses 2x points
                     await conn.execute(
                         "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $2 WHERE user_id = $3",
@@ -2199,7 +2201,7 @@ class Points(commands.Cog):
                 """SELECT points, total_sent, total_received, daily_earned,
                    attack_attempts_low, attack_wins_low,
                    attack_attempts_high, attack_wins_high,
-                   cumulative_attack_gains
+                   cumulative_attack_gains, cumulative_defense_losses
                    FROM users WHERE user_id = $1""",
                 target.id,
             )
@@ -2213,12 +2215,15 @@ class Points(commands.Cog):
                 attack_wins_low = 0
                 attack_attempts_high = 0
                 attack_wins_high = 0
+                cumulative_attack = 0
+                cumulative_defense = 0
             else:
                 points = user_data["points"] or 0
                 total_sent = user_data["total_sent"] or 0
                 total_received = user_data["total_received"] or 0
                 daily_earned = user_data["daily_earned"] or 0
                 cumulative_attack = user_data["cumulative_attack_gains"] or 0
+                cumulative_defense = user_data["cumulative_defense_losses"] or 0
                 attack_attempts_low = user_data["attack_attempts_low"] or 0
                 attack_wins_low = user_data["attack_wins_low"] or 0
                 attack_attempts_high = user_data["attack_attempts_high"] or 0
@@ -2245,7 +2250,7 @@ class Points(commands.Cog):
         display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000",
             inline=True,
         )
 
@@ -2779,7 +2784,9 @@ class AttackBeggarModal(disnake.ui.Modal):
 
         async with db.pool.acquire() as conn:
             # Reset cumulative attack gains and defense losses for all users
-            await conn.execute("UPDATE users SET cumulative_attack_gains = 0, cumulative_defense_losses = 0")
+            await conn.execute(
+                "UPDATE users SET cumulative_attack_gains = 0, cumulative_defense_losses = 0"
+            )
 
             # Tax rich users (>3000 points) at 10%
             rich_users = await conn.fetch(
