@@ -685,7 +685,11 @@ class Points(commands.Cog):
                         msg += f" ({tax_amount} tax)"
                     await inter.response.send_message(msg)
             else:
-                # Attacker loses points to target
+                # Calculate 5% tax on failed attack
+                tax_amount = int(amount * 0.05)
+                target_gain = amount - tax_amount
+
+                # Attacker loses points, target gains (minus tax)
                 await conn.execute(
                     "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                     amount,
@@ -693,9 +697,12 @@ class Points(commands.Cog):
                 )
                 await conn.execute(
                     "UPDATE users SET points = points + $1 WHERE user_id = $2",
-                    amount,
+                    target_gain,
                     target.id,
                 )
+
+                # Add tax to pool
+                await self.add_to_tax_pool(conn, tax_amount)
 
                 # Track attack stats (loss)
                 if amount > 100:
@@ -716,15 +723,21 @@ class Points(commands.Cog):
                 attack_channel = self.bot.get_channel(1456204479203639340)
                 if attack_channel:
                     if target_has_dodge:
+                        description = f"{target.mention} dodged {inter.author.mention}'s attack! {inter.author.mention} lost **{amount} {Config.POINT_NAME}**!"
+                        if tax_amount > 0:
+                            description += f" ({tax_amount} tax collected)"
                         embed = disnake.Embed(
                             title="🛡️ Attack Dodged!",
-                            description=f"{target.mention} dodged {inter.author.mention}'s attack! {inter.author.mention} lost **{amount} {Config.POINT_NAME}**!",
+                            description=description,
                             color=disnake.Color.blue(),
                         )
                     else:
+                        description = f"{inter.author.mention} failed to attack {target.mention} and lost **{amount} {Config.POINT_NAME}**!"
+                        if tax_amount > 0:
+                            description += f" ({tax_amount} tax collected)"
                         embed = disnake.Embed(
                             title="💔 Attack Failed!",
-                            description=f"{inter.author.mention} failed to attack {target.mention} and lost **{amount} {Config.POINT_NAME}**!",
+                            description=description,
                             color=disnake.Color.red(),
                         )
                     await attack_channel.send(embed=embed)
@@ -732,25 +745,29 @@ class Points(commands.Cog):
                 # If used outside the attack channel, show same result but delete after 5 seconds
                 if inter.channel_id != 1456204479203639340:
                     if target_has_dodge:
-                        await inter.response.send_message(
-                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
-                        )
+                        msg = f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}"
+                        if tax_amount > 0:
+                            msg += f" ({tax_amount} tax)"
+                        await inter.response.send_message(msg)
                     else:
-                        await inter.response.send_message(
-                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
-                        )
+                        msg = f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}"
+                        if tax_amount > 0:
+                            msg += f" ({tax_amount} tax)"
+                        await inter.response.send_message(msg)
                     # Delete after 5 seconds
                     await asyncio.sleep(5)
                     await inter.delete_original_response()
                 else:
                     if target_has_dodge:
-                        await inter.response.send_message(
-                            f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}!"
-                        )
+                        msg = f"🛡️ **Attack dodged!** {target.mention} dodged your attack and you lost {amount} {Config.POINT_NAME}"
+                        if tax_amount > 0:
+                            msg += f" ({tax_amount} tax)"
+                        await inter.response.send_message(msg)
                     else:
-                        await inter.response.send_message(
-                            f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}!"
-                        )
+                        msg = f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}"
+                        if tax_amount > 0:
+                            msg += f" ({tax_amount} tax)"
+                        await inter.response.send_message(msg)
 
     @commands.slash_command(
         description="Pierce attack - 100% success vs dodge, 100% fail otherwise"
