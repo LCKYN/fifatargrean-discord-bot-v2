@@ -426,20 +426,24 @@ class Points(commands.Cog):
             inline=False,
         )
         await inter.response.send_message(embed=embed)
+        # Delete after 10 seconds
+        await asyncio.sleep(10)
+        await inter.delete_original_response()
 
     @commands.slash_command(description="Check your current points")
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
             user_data = await conn.fetchrow(
-                "SELECT points, daily_earned FROM users WHERE user_id = $1",
+                "SELECT points, daily_earned, cumulative_attack_gains FROM users WHERE user_id = $1",
                 inter.author.id,
             )
             points = user_data["points"] if user_data else 0
             daily_earned = user_data["daily_earned"] if user_data else 0
+            cumulative_attack = user_data["cumulative_attack_gains"] if user_data else 0
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000",
                 ephemeral=True,
             )
 
@@ -602,20 +606,9 @@ class Points(commands.Cog):
                     )
                     return
 
-                # Apply rich defender penalty (20% more loss if target has >3000 points)
-                actual_amount = amount
-                rich_penalty = 0
-                if target_points > 3000:
-                    rich_penalty = int(amount * 0.20)
-                    actual_amount = amount + rich_penalty
-
                 # Check if attacker would exceed cap
                 if attacker_cumulative + amount > 2000:
                     amount = 2000 - attacker_cumulative
-                    actual_amount = amount
-                    if target_points > 3000:
-                        rich_penalty = int(amount * 0.20)
-                        actual_amount = amount + rich_penalty
 
                 # Calculate 5% tax
                 tax_amount = int(amount * 0.05)
@@ -630,7 +623,7 @@ class Points(commands.Cog):
                 )
                 await conn.execute(
                     "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                    actual_amount,
+                    amount,
                     target.id,
                 )
 
@@ -658,8 +651,8 @@ class Points(commands.Cog):
                     description = f"{inter.author.mention} stole **{attacker_gain} {Config.POINT_NAME}** from {target.mention}!"
                     if tax_amount > 0:
                         description += f" ({tax_amount} tax collected)"
-                    if rich_penalty > 0:
-                        description += f"\n💎 Rich penalty: {rich_penalty} extra taken!"
+                    if target_points > 3000:
+                        description += f"\n💎 Rich target bonus applied!"
                     
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
@@ -673,8 +666,6 @@ class Points(commands.Cog):
                     msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
-                    if rich_penalty > 0:
-                        msg += f" +{rich_penalty} rich penalty!"
                     await inter.response.send_message(msg)
                     # Delete after 5 seconds
                     await asyncio.sleep(5)
@@ -683,8 +674,6 @@ class Points(commands.Cog):
                     msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
-                    if rich_penalty > 0:
-                        msg += f" +{rich_penalty} rich penalty!"
                     await inter.response.send_message(msg)
             else:
                 # Attacker loses points to target
@@ -2143,7 +2132,8 @@ class Points(commands.Cog):
             user_data = await conn.fetchrow(
                 """SELECT points, total_sent, total_received, daily_earned,
                    attack_attempts_low, attack_wins_low,
-                   attack_attempts_high, attack_wins_high
+                   attack_attempts_high, attack_wins_high,
+                   cumulative_attack_gains
                    FROM users WHERE user_id = $1""",
                 target.id,
             )
@@ -2162,6 +2152,7 @@ class Points(commands.Cog):
                 total_sent = user_data["total_sent"] or 0
                 total_received = user_data["total_received"] or 0
                 daily_earned = user_data["daily_earned"] or 0
+                cumulative_attack = user_data["cumulative_attack_gains"] or 0
                 attack_attempts_low = user_data["attack_attempts_low"] or 0
                 attack_wins_low = user_data["attack_wins_low"] or 0
                 attack_attempts_high = user_data["attack_attempts_high"] or 0
@@ -2188,7 +2179,7 @@ class Points(commands.Cog):
         display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000",
             inline=True,
         )
 
