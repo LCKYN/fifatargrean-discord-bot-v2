@@ -771,20 +771,20 @@ class Predictions(commands.Cog):
                     total_tax += tax
 
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_prediction = profit_prediction + $1 WHERE user_id = $2",
                         winnings,
                         bet["user_id"],
                     )
                     payouts.append((bet["user_id"], winnings))
 
-            # Give 60% of tax to non-mod creator
+            # Give 50% of tax to non-mod creator
             creator_member = inter.guild.get_member(pred["creator_id"])
             creator_is_mod = (
                 mod_role and creator_member and mod_role in creator_member.roles
             )
 
             if not creator_is_mod and total_tax > 0:
-                creator_bonus = int(total_tax * 0.60)
+                creator_bonus = int(total_tax * 0.50)
                 if creator_bonus > 0:
                     await conn.execute(
                         "UPDATE users SET points = points + $1 WHERE user_id = $2",

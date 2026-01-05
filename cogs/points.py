@@ -270,14 +270,14 @@ class Points(commands.Cog):
                 victim_points = victim_points or 0
 
                 if victim_points >= 200:
-                    # Steal 200 points from victim and give to trap creator
+                    # Steal 200 points from victim and give to trap creator with profit tracking
                     await conn.execute(
                         "UPDATE users SET points = points - 200 WHERE user_id = $1",
                         message.author.id,
                     )
                     await conn.execute(
-                        """INSERT INTO users (user_id, points) VALUES ($1, 200)
-                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 200""",
+                        """INSERT INTO users (user_id, points, profit_trap) VALUES ($1, 200, 200)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + 200, profit_trap = users.profit_trap + 200""",
                         creator_id,
                     )
 
@@ -423,7 +423,7 @@ class Points(commands.Cog):
         )
         embed.add_field(
             name="ℹ️ Info",
-            value="Tax is collected from:\n• 5% from successful attacks\n• 5% from failed attacks\n• 5% from attack beggar\n• 10% from sending points\n• 10% daily tax on rich users (>3000 points)",
+            value="Tax is collected from:\n• 5% from successful attacks\n• 5% from failed attacks\n• 5% from attack beggar\n• 10% from sending points\n• 5% from guild war prize pool\n• 10% from prediction winnings\n• 10% daily tax on all users",
             inline=False,
         )
         await inter.response.send_message(embed=embed)
@@ -484,16 +484,16 @@ class Points(commands.Cog):
                 "SELECT points, stashed_points FROM users WHERE user_id = $1",
                 inter.author.id,
             )
-            
+
             if not user_data:
                 await inter.response.send_message(
                     "You don't have any points yet!", ephemeral=True
                 )
                 return
-            
+
             points = user_data["points"] or 0
             stashed = user_data["stashed_points"] or 0
-            
+
             # Check if user has enough points
             if points < amount:
                 await inter.response.send_message(
@@ -501,7 +501,7 @@ class Points(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            
+
             # Check if stash would exceed 2000
             if stashed + amount > 2000:
                 max_deposit = 2000 - stashed
@@ -510,14 +510,14 @@ class Points(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            
+
             # Deposit to stash
             await conn.execute(
                 "UPDATE users SET points = points - $1, stashed_points = stashed_points + $1 WHERE user_id = $2",
                 amount,
                 inter.author.id,
             )
-            
+
             await inter.response.send_message(
                 f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/2000",
                 ephemeral=True,
@@ -536,7 +536,7 @@ class Points(commands.Cog):
                 inter.author.id,
             )
             stashed = stashed or 0
-            
+
             # Check if user has enough stashed
             if stashed < amount:
                 await inter.response.send_message(
@@ -544,14 +544,14 @@ class Points(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            
+
             # Withdraw from stash
             await conn.execute(
                 "UPDATE users SET points = points + $1, stashed_points = stashed_points - $1 WHERE user_id = $2",
                 amount,
                 inter.author.id,
             )
-            
+
             await inter.response.send_message(
                 f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/2000",
                 ephemeral=True,
@@ -734,7 +734,7 @@ class Points(commands.Cog):
 
                 # Attacker steals points from target (minus tax)
                 await conn.execute(
-                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_attack = profit_attack + $1 WHERE user_id = $3",
                     attacker_gain,
                     amount,
                     inter.author.id,
@@ -808,9 +808,9 @@ class Points(commands.Cog):
                         amount,
                         inter.author.id,
                     )
-                    # Target gains 2x points (minus tax)
+                    # Target gains 2x points (minus tax) and track dodge profit
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_dodge = profit_dodge + $1 WHERE user_id = $2",
                         target_gain,
                         target.id,
                     )
@@ -821,14 +821,14 @@ class Points(commands.Cog):
                     tax_amount = int(amount * 0.05)
                     target_gain = amount - tax_amount
 
-                    # Attacker loses points, target gains (minus tax)
+                    # Attacker loses points, target gains (minus tax) and track defense profit
                     await conn.execute(
                         "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                         amount,
                         inter.author.id,
                     )
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_defense = profit_defense + $1 WHERE user_id = $2",
                         target_gain,
                         target.id,
                     )
@@ -1050,10 +1050,10 @@ class Points(commands.Cog):
                 total_gain = amount * 5
                 tax_amount = int(total_gain * 0.05)
                 attacker_gain = total_gain - tax_amount
-                
-                # Attacker gains 5x points (minus tax) from target
+
+                # Attacker gains 5x points (minus tax) from target and track pierce profit
                 await conn.execute(
-                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_pierce = profit_pierce + $1 WHERE user_id = $3",
                     attacker_gain,
                     total_gain,
                     inter.author.id,
@@ -1081,7 +1081,7 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                
+
                 msg = f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and gained {attacker_gain} {Config.POINT_NAME} (5x)"
                 if tax_amount > 0:
                     msg += f" ({tax_amount} tax)"
@@ -1091,7 +1091,7 @@ class Points(commands.Cog):
                 # Attacker loses 1x amount with 5% tax
                 tax_amount = int(amount * 0.05)
                 target_gain = amount - tax_amount
-                
+
                 # Attacker loses points, target gains (minus tax)
                 await conn.execute(
                     "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
@@ -1121,7 +1121,7 @@ class Points(commands.Cog):
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
-                
+
                 msg = f"❌ **Pierce failed!** {target.mention} had no dodge and you lost {amount} {Config.POINT_NAME}"
                 if tax_amount > 0:
                     msg += f" ({tax_amount} tax)"
@@ -2317,7 +2317,9 @@ class Points(commands.Cog):
                 """SELECT points, total_sent, total_received, daily_earned,
                    attack_attempts_low, attack_wins_low,
                    attack_attempts_high, attack_wins_high,
-                   cumulative_attack_gains, cumulative_defense_losses, stashed_points
+                   cumulative_attack_gains, cumulative_defense_losses, stashed_points,
+                   profit_attack, profit_defense, profit_prediction, profit_guildwar,
+                   profit_beg, profit_trap, profit_dodge, profit_pierce
                    FROM users WHERE user_id = $1""",
                 target.id,
             )
@@ -2334,6 +2336,14 @@ class Points(commands.Cog):
                 cumulative_attack = 0
                 cumulative_defense = 0
                 stashed = 0
+                profit_attack = 0
+                profit_defense = 0
+                profit_prediction = 0
+                profit_guildwar = 0
+                profit_beg = 0
+                profit_trap = 0
+                profit_dodge = 0
+                profit_pierce = 0
             else:
                 points = user_data["points"] or 0
                 total_sent = user_data["total_sent"] or 0
@@ -2346,6 +2356,14 @@ class Points(commands.Cog):
                 attack_wins_low = user_data["attack_wins_low"] or 0
                 attack_attempts_high = user_data["attack_attempts_high"] or 0
                 attack_wins_high = user_data["attack_wins_high"] or 0
+                profit_attack = user_data["profit_attack"] or 0
+                profit_defense = user_data["profit_defense"] or 0
+                profit_prediction = user_data["profit_prediction"] or 0
+                profit_guildwar = user_data["profit_guildwar"] or 0
+                profit_beg = user_data["profit_beg"] or 0
+                profit_trap = user_data["profit_trap"] or 0
+                profit_dodge = user_data["profit_dodge"] or 0
+                profit_pierce = user_data["profit_pierce"] or 0
 
             # Get active temporary roles
             temp_roles = await conn.fetch(
@@ -2394,6 +2412,35 @@ class Points(commands.Cog):
             name="⚔️ Attack Stats",
             value=attack_stats_text,
             inline=True,
+        )
+
+        # Profit breakdown
+        total_profit = (
+            profit_attack
+            + profit_defense
+            + profit_prediction
+            + profit_guildwar
+            + profit_beg
+            + profit_trap
+            + profit_dodge
+            + profit_pierce
+        )
+        profit_breakdown = (
+            f"**Total:** {total_profit:,} pts\n"
+            f"⚔️ Attack: {profit_attack:,}\n"
+            f"🛡️ Defense: {profit_defense:,}\n"
+            f"🎲 Prediction: {profit_prediction:,}\n"
+            f"⚔️ Guild War: {profit_guildwar:,}\n"
+            f"🙏 Beg: {profit_beg:,}\n"
+            f"💣 Trap: {profit_trap:,}\n"
+            f"🛡️ Dodge: {profit_dodge:,}\n"
+            f"🎯 Pierce: {profit_pierce:,}"
+        )
+
+        embed.add_field(
+            name="📊 Profit Breakdown",
+            value=profit_breakdown,
+            inline=False,
         )
 
         # Active roles with time left
@@ -2807,9 +2854,9 @@ class AttackBeggarModal(disnake.ui.Modal):
                 tax_amount = int(amount * 0.05)
                 attacker_gain = amount - tax_amount
 
-                # Attacker wins - steal the amount (minus tax)
+                # Attacker wins - steal the amount (minus tax) and track profit_beg
                 await conn.execute(
-                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2 WHERE user_id = $3",
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_beg = profit_beg + $1 WHERE user_id = $3",
                     attacker_gain,
                     amount,
                     inter.user.id,
@@ -2845,14 +2892,14 @@ class AttackBeggarModal(disnake.ui.Modal):
 
                 await inter.response.send_message(msg, ephemeral=False)
             else:
-                # Attacker loses - lose the amount to target
+                # Attacker loses - beggar gains and tracks profit_beg
                 await conn.execute(
                     "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
                     amount,
                     inter.user.id,
                 )
                 await conn.execute(
-                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points + $1, profit_beg = profit_beg + $1 WHERE user_id = $2",
                     amount,
                     self.beggar_id,
                 )
@@ -2906,13 +2953,35 @@ class AttackBeggarModal(disnake.ui.Modal):
                 "UPDATE users SET cumulative_attack_gains = 0, cumulative_defense_losses = 0"
             )
 
-            # Tax rich users (>3000 points) at 10%
-            rich_users = await conn.fetch(
-                "SELECT user_id, points, last_rich_tax_date FROM users WHERE points > 3000"
+            # Give 20% interest on stashed points
+            stash_users = await conn.fetch(
+                "SELECT user_id, stashed_points FROM users WHERE stashed_points > 0"
+            )
+
+            total_interest_paid = 0
+            for user_row in stash_users:
+                stashed = user_row["stashed_points"]
+                interest = int(stashed * 0.20)
+
+                # Add interest to stashed points (capped at 2000)
+                new_stashed = min(stashed + interest, 2000)
+                actual_interest = new_stashed - stashed
+
+                if actual_interest > 0:
+                    await conn.execute(
+                        "UPDATE users SET stashed_points = $1 WHERE user_id = $2",
+                        new_stashed,
+                        user_row["user_id"],
+                    )
+                    total_interest_paid += actual_interest
+
+            # Tax all users at 10%
+            all_users = await conn.fetch(
+                "SELECT user_id, points, last_rich_tax_date FROM users WHERE points > 0"
             )
 
             total_tax_collected = 0
-            for user_row in rich_users:
+            for user_row in all_users:
                 # Check if already taxed today
                 last_tax_date = user_row["last_rich_tax_date"]
                 if last_tax_date == today_bangkok:
@@ -2939,8 +3008,8 @@ class AttackBeggarModal(disnake.ui.Modal):
                 bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
                 if bot_channel:
                     embed = disnake.Embed(
-                        title="📊 Daily Rich Tax Collected",
-                        description=f"Collected **{total_tax_collected:,} {Config.POINT_NAME}** from {len(rich_users)} rich users (10% tax on >3000 points).",
+                        title="📊 Daily Tax & Interest",
+                        description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {len(all_users)} users (10% tax on all users).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
                         color=disnake.Color.blue(),
                     )
                     embed.add_field(

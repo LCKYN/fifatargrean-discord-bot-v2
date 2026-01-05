@@ -438,12 +438,12 @@ class CreateWarModal(disnake.ui.Modal):
                 max_length=50,
             ),
             disnake.ui.TextInput(
-                label="Entry Cost (10-500)",
-                placeholder="Enter points required to join (10-500)",
+                label="Entry Cost (min 10)",
+                placeholder="Enter points required to join (min 10)",
                 custom_id="entry_cost",
                 style=disnake.TextInputStyle.short,
                 min_length=2,
-                max_length=3,
+                max_length=10,
             ),
         ]
         super().__init__(title="Create Guild War", components=components)
@@ -455,9 +455,9 @@ class CreateWarModal(disnake.ui.Modal):
 
         try:
             entry_cost = int(inter.text_values["entry_cost"])
-            if entry_cost < 10 or entry_cost > 500:
+            if entry_cost < 10:
                 await inter.response.send_message(
-                    "Entry cost must be between 10 and 500.", ephemeral=True
+                    "Entry cost must be at least 10.", ephemeral=True
                 )
                 return
         except ValueError:
@@ -1258,7 +1258,7 @@ class GuildWar(commands.Cog):
             async with db.pool.acquire() as conn:
                 for winner in winners:
                     await conn.execute(
-                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_guildwar = profit_guildwar + $1 WHERE user_id = $2",
                         reward_per_winner,
                         winner["user_id"],
                     )

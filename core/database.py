@@ -101,6 +101,14 @@ class Database:
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_rich_tax_date DATE;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS cumulative_defense_losses INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS stashed_points INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_attack INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_defense INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_prediction INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_guildwar INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_beg INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_trap INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_dodge INTEGER DEFAULT 0;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS profit_pierce INTEGER DEFAULT 0;
             """)
 
             # Migration: Add new prediction columns if they don't exist
