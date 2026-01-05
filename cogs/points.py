@@ -43,7 +43,7 @@ class Points(commands.Cog):
         await conn.execute(
             """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1::TEXT)
                ON CONFLICT (key) DO UPDATE SET value = (COALESCE(CAST(bot_settings.value AS INTEGER), 0) + $2)::TEXT""",
-            amount,
+            str(amount),
             amount,
         )
 
@@ -52,7 +52,7 @@ class Points(commands.Cog):
         await conn.execute(
             """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1)
                ON CONFLICT (key) DO UPDATE SET value = $1::TEXT""",
-            amount,
+            str(amount),
         )
 
     @commands.Cog.listener()
@@ -590,14 +590,14 @@ class Points(commands.Cog):
             else:
                 # 45% success normally, 35% if attacking with more than 100 points
                 win_chance = 0.35 if amount > 100 else 0.45
-                
+
                 # Rich target bonus: +20% win chance when attacking players with >3000 points
                 if target_points > 3000:
                     win_chance += 0.20
-                
+
                 # Ensure win_chance stays within 0-1 range
                 win_chance = max(0.0, min(1.0, win_chance))
-                
+
                 success = random.random() < win_chance
 
             if success:
