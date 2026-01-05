@@ -28,9 +28,6 @@ class Points(commands.Cog):
         self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
 
-    def cog_load(self):
-        self.daily_tax_task.start()  # Start daily tax collection
-
     def cog_unload(self):
         self.daily_tax_task.cancel()
 
@@ -2710,7 +2707,8 @@ class AttackBeggarModal(disnake.ui.Modal):
     @commands.Cog.listener()
     async def on_ready(self):
         """Start the daily tax task when bot is ready"""
-        pass
+        if not self.daily_tax_task.is_running():
+            self.daily_tax_task.start()
 
     @tasks.loop(hours=24)
     async def daily_tax_task(self):
