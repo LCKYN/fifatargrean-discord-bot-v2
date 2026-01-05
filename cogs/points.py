@@ -469,17 +469,14 @@ class Points(commands.Cog):
                 stashed = user_row["stashed_points"]
                 interest = int(stashed * 0.20)
 
-                # Add interest to stashed points (capped at 2000)
-                new_stashed = min(stashed + interest, 2000)
-                actual_interest = new_stashed - stashed
-
-                if actual_interest > 0:
+                # Pay interest to main points (stash stays same)
+                if interest > 0:
                     await conn.execute(
-                        "UPDATE users SET stashed_points = $1 WHERE user_id = $2",
-                        new_stashed,
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        interest,
                         user_row["user_id"],
                     )
-                    total_interest_paid += actual_interest
+                    total_interest_paid += interest
 
             # Tax all users at 10%
             all_users = await conn.fetch(
@@ -537,6 +534,61 @@ class Points(commands.Cog):
                 name="✅ Also Reset",
                 value="All cumulative attack gains and defense losses have been reset to 0.",
                 inline=False,
+            )
+            await bot_channel.send(embed=public_embed)
+
+    @commands.slash_command(description="[MOD] Pay interest only without tax/reset")
+    async def runinterest(self, inter: disnake.ApplicationCommandInteraction):
+        """Manually pay stash interest without running tax or reset (mod only)"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "❌ This command is only available to moderators.", ephemeral=True
+            )
+            return
+
+        await inter.response.defer(ephemeral=True)
+
+        if db.pool is None:
+            await inter.followup.send("❌ Database not connected.", ephemeral=True)
+            return
+
+        async with db.pool.acquire() as conn:
+            # Give 20% interest on stashed points
+            stash_users = await conn.fetch(
+                "SELECT user_id, stashed_points FROM users WHERE stashed_points > 0"
+            )
+
+            total_interest_paid = 0
+            for user_row in stash_users:
+                stashed = user_row["stashed_points"]
+                interest = int(stashed * 0.20)
+
+                # Pay interest to main points (stash stays same)
+                if interest > 0:
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        interest,
+                        user_row["user_id"],
+                    )
+                    total_interest_paid += interest
+
+        # Send response
+        embed = disnake.Embed(
+            title="✅ Interest Paid",
+            description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points)",
+            color=disnake.Color.green(),
+        )
+        await inter.followup.send(embed=embed, ephemeral=True)
+
+        # Also send public notification
+        bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
+        if bot_channel:
+            public_embed = disnake.Embed(
+                title="💰 Stash Interest Paid",
+                description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
+                color=disnake.Color.gold(),
             )
             await bot_channel.send(embed=public_embed)
 
@@ -3072,17 +3124,14 @@ class AttackBeggarModal(disnake.ui.Modal):
                 stashed = user_row["stashed_points"]
                 interest = int(stashed * 0.20)
 
-                # Add interest to stashed points (capped at 2000)
-                new_stashed = min(stashed + interest, 2000)
-                actual_interest = new_stashed - stashed
-
-                if actual_interest > 0:
+                # Pay interest to main points (stash stays same)
+                if interest > 0:
                     await conn.execute(
-                        "UPDATE users SET stashed_points = $1 WHERE user_id = $2",
-                        new_stashed,
+                        "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                        interest,
                         user_row["user_id"],
                     )
-                    total_interest_paid += actual_interest
+                    total_interest_paid += interest
 
             # Tax all users at 10%
             all_users = await conn.fetch(
