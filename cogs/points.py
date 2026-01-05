@@ -435,7 +435,7 @@ class Points(commands.Cog):
     async def point(self, inter: disnake.ApplicationCommandInteraction):
         async with db.pool.acquire() as conn:
             user_data = await conn.fetchrow(
-                "SELECT points, daily_earned, cumulative_attack_gains, cumulative_defense_losses FROM users WHERE user_id = $1",
+                "SELECT points, daily_earned, cumulative_attack_gains, cumulative_defense_losses, stashed_points FROM users WHERE user_id = $1",
                 inter.author.id,
             )
             points = user_data["points"] if user_data else 0
@@ -444,10 +444,11 @@ class Points(commands.Cog):
             cumulative_defense = (
                 user_data["cumulative_defense_losses"] if user_data else 0
             )
+            stashed = user_data["stashed_points"] if user_data else 0
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000\n💰 Stashed: {stashed}/2000",
                 ephemeral=True,
             )
 
@@ -464,6 +465,96 @@ class Points(commands.Cog):
             points = points if points else 0
             await inter.response.send_message(
                 f"{user.mention} has {points} {Config.POINT_NAME}.", ephemeral=True
+            )
+
+    @commands.slash_command(description="Stash points for safekeeping (max 2000)")
+    async def stash(self, inter: disnake.ApplicationCommandInteraction):
+        """Stash command group"""
+        pass
+
+    @stash.sub_command(description="Deposit points into your stash")
+    async def deposit(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        amount: int = commands.Param(description="Amount to deposit", ge=1),
+    ):
+        """Deposit points into stash (max 2000 total)"""
+        async with db.pool.acquire() as conn:
+            user_data = await conn.fetchrow(
+                "SELECT points, stashed_points FROM users WHERE user_id = $1",
+                inter.author.id,
+            )
+            
+            if not user_data:
+                await inter.response.send_message(
+                    "You don't have any points yet!", ephemeral=True
+                )
+                return
+            
+            points = user_data["points"] or 0
+            stashed = user_data["stashed_points"] or 0
+            
+            # Check if user has enough points
+            if points < amount:
+                await inter.response.send_message(
+                    f"You don't have enough {Config.POINT_NAME}. You have {points}, trying to deposit {amount}.",
+                    ephemeral=True,
+                )
+                return
+            
+            # Check if stash would exceed 2000
+            if stashed + amount > 2000:
+                max_deposit = 2000 - stashed
+                await inter.response.send_message(
+                    f"Your stash can only hold 2000 {Config.POINT_NAME}. You currently have {stashed} stashed. Maximum you can deposit: {max_deposit}",
+                    ephemeral=True,
+                )
+                return
+            
+            # Deposit to stash
+            await conn.execute(
+                "UPDATE users SET points = points - $1, stashed_points = stashed_points + $1 WHERE user_id = $2",
+                amount,
+                inter.author.id,
+            )
+            
+            await inter.response.send_message(
+                f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/2000",
+                ephemeral=True,
+            )
+
+    @stash.sub_command(description="Withdraw points from your stash")
+    async def withdraw(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        amount: int = commands.Param(description="Amount to withdraw", ge=1),
+    ):
+        """Withdraw points from stash"""
+        async with db.pool.acquire() as conn:
+            stashed = await conn.fetchval(
+                "SELECT stashed_points FROM users WHERE user_id = $1",
+                inter.author.id,
+            )
+            stashed = stashed or 0
+            
+            # Check if user has enough stashed
+            if stashed < amount:
+                await inter.response.send_message(
+                    f"You don't have enough stashed {Config.POINT_NAME}. You have {stashed} stashed, trying to withdraw {amount}.",
+                    ephemeral=True,
+                )
+                return
+            
+            # Withdraw from stash
+            await conn.execute(
+                "UPDATE users SET points = points + $1, stashed_points = stashed_points - $1 WHERE user_id = $2",
+                amount,
+                inter.author.id,
+            )
+            
+            await inter.response.send_message(
+                f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/2000",
+                ephemeral=True,
             )
 
     @commands.slash_command(description="Attack another user to steal points")
@@ -2226,7 +2317,7 @@ class Points(commands.Cog):
                 """SELECT points, total_sent, total_received, daily_earned,
                    attack_attempts_low, attack_wins_low,
                    attack_attempts_high, attack_wins_high,
-                   cumulative_attack_gains, cumulative_defense_losses
+                   cumulative_attack_gains, cumulative_defense_losses, stashed_points
                    FROM users WHERE user_id = $1""",
                 target.id,
             )
@@ -2242,6 +2333,7 @@ class Points(commands.Cog):
                 attack_wins_high = 0
                 cumulative_attack = 0
                 cumulative_defense = 0
+                stashed = 0
             else:
                 points = user_data["points"] or 0
                 total_sent = user_data["total_sent"] or 0
@@ -2249,6 +2341,7 @@ class Points(commands.Cog):
                 daily_earned = user_data["daily_earned"] or 0
                 cumulative_attack = user_data["cumulative_attack_gains"] or 0
                 cumulative_defense = user_data["cumulative_defense_losses"] or 0
+                stashed = user_data["stashed_points"] or 0
                 attack_attempts_low = user_data["attack_attempts_low"] or 0
                 attack_wins_low = user_data["attack_wins_low"] or 0
                 attack_attempts_high = user_data["attack_attempts_high"] or 0
@@ -2275,7 +2368,7 @@ class Points(commands.Cog):
         display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000\n💰 Stashed: {stashed}/2000",
             inline=True,
         )
 
