@@ -1122,12 +1122,12 @@ class Points(commands.Cog):
         now = datetime.datetime.now()
         user_id = inter.author.id
 
-        # Check cooldown (30 minutes)
+        # Check cooldown (15 minutes)
         if user_id in self.dodge_cooldowns:
             time_passed = (now - self.dodge_cooldowns[user_id]).total_seconds()
-            if time_passed < 1800:  # 30 minutes
-                remaining_mins = int((1800 - time_passed) / 60)
-                remaining_secs = int((1800 - time_passed) % 60)
+            if time_passed < 900:  # 15 minutes
+                remaining_mins = int((900 - time_passed) / 60)
+                remaining_secs = int((900 - time_passed) % 60)
                 await inter.response.send_message(
                     f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using dodge again.",
                     ephemeral=True,
