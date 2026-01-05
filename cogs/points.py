@@ -41,8 +41,9 @@ class Points(commands.Cog):
     async def add_to_tax_pool(self, conn, amount: int):
         """Add amount to tax pool"""
         await conn.execute(
-            """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1)
-               ON CONFLICT (key) DO UPDATE SET value = (CAST(bot_settings.value AS INTEGER) + $1)::TEXT""",
+            """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1::TEXT)
+               ON CONFLICT (key) DO UPDATE SET value = (COALESCE(CAST(bot_settings.value AS INTEGER), 0) + $2)::TEXT""",
+            amount,
             amount,
         )
 
