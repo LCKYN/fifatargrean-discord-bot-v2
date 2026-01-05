@@ -423,7 +423,7 @@ class Points(commands.Cog):
         )
         embed.add_field(
             name="ℹ️ Info",
-            value="Tax is collected from:\n• 5% from successful attacks\n• 5% from attack beggar\n• 10% daily tax on rich users (>3000 points)",
+            value="Tax is collected from:\n• 5% from successful attacks\n• 5% from failed attacks\n• 5% from attack beggar\n• 10% from sending points\n• 10% daily tax on rich users (>3000 points)",
             inline=False,
         )
         await inter.response.send_message(embed=embed)
@@ -441,7 +441,9 @@ class Points(commands.Cog):
             points = user_data["points"] if user_data else 0
             daily_earned = user_data["daily_earned"] if user_data else 0
             cumulative_attack = user_data["cumulative_attack_gains"] if user_data else 0
-            cumulative_defense = user_data["cumulative_defense_losses"] if user_data else 0
+            cumulative_defense = (
+                user_data["cumulative_defense_losses"] if user_data else 0
+            )
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
@@ -1905,6 +1907,9 @@ class Points(commands.Cog):
                 user.id,
                 received,
             )
+
+            # Add tax to pool
+            await self.add_to_tax_pool(conn, tax)
 
         channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
         if channel:
