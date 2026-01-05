@@ -551,9 +551,15 @@ class Points(commands.Cog):
             target_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", target.id
             )
+            
+            # Check target's cumulative defense losses
+            target_defense_losses = await conn.fetchval(
+                "SELECT cumulative_defense_losses FROM users WHERE user_id = $1", target.id
+            )
 
             attacker_points = attacker_points or 0
             target_points = target_points or 0
+            target_defense_losses = target_defense_losses or 0
 
             # Check both have at least the attack amount
             if attacker_points < amount:
@@ -566,6 +572,14 @@ class Points(commands.Cog):
             if target_points < amount:
                 await inter.response.send_message(
                     f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
+                    ephemeral=True,
+                )
+                return
+            
+            # Check if target has already lost 2000 points today from being attacked
+            if target_defense_losses >= 2000:
+                await inter.response.send_message(
+                    f"🛡️ {target.mention} has already lost 2000 {Config.POINT_NAME} from being attacked today. They cannot be attacked anymore.",
                     ephemeral=True,
                 )
                 return
@@ -631,7 +645,7 @@ class Points(commands.Cog):
                     inter.author.id,
                 )
                 await conn.execute(
-                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    "UPDATE users SET points = points - $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
                     amount,
                     target.id,
                 )
@@ -2764,8 +2778,8 @@ class AttackBeggarModal(disnake.ui.Modal):
         today_bangkok = now_bangkok.date()
 
         async with db.pool.acquire() as conn:
-            # Reset cumulative attack gains for all users
-            await conn.execute("UPDATE users SET cumulative_attack_gains = 0")
+            # Reset cumulative attack gains and defense losses for all users
+            await conn.execute("UPDATE users SET cumulative_attack_gains = 0, cumulative_defense_losses = 0")
 
             # Tax rich users (>3000 points) at 10%
             rich_users = await conn.fetch(
@@ -2806,7 +2820,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                     )
                     embed.add_field(
                         name="✅ Also Reset",
-                        value="All cumulative attack gains have been reset to 0.",
+                        value="All cumulative attack gains and defense losses have been reset to 0.",
                         inline=False,
                     )
                     await bot_channel.send(embed=embed)

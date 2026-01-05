@@ -99,6 +99,7 @@ class Database:
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS attack_wins_high INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS cumulative_attack_gains INTEGER DEFAULT 0;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_rich_tax_date DATE;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS cumulative_defense_losses INTEGER DEFAULT 0;
             """)
 
             # Migration: Add new prediction columns if they don't exist
