@@ -589,6 +589,14 @@ class Points(commands.Cog):
             else:
                 # 45% success normally, 35% if attacking with more than 100 points
                 win_chance = 0.35 if amount > 100 else 0.45
+                
+                # Rich target bonus: +20% win chance when attacking players with >3000 points
+                if target_points > 3000:
+                    win_chance += 0.20
+                
+                # Ensure win_chance stays within 0-1 range
+                win_chance = max(0.0, min(1.0, win_chance))
+                
                 success = random.random() < win_chance
 
             if success:
@@ -653,7 +661,7 @@ class Points(commands.Cog):
                         description += f" ({tax_amount} tax collected)"
                     if target_points > 3000:
                         description += f"\n💎 Rich target bonus applied!"
-                    
+
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
                         description=description,
@@ -1216,7 +1224,10 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         percentage: int = commands.Param(
-            description="Percentage of tax pool to distribute (1-100)", ge=1, le=100, default=100
+            description="Percentage of tax pool to distribute (1-100)",
+            ge=1,
+            le=100,
+            default=100,
         ),
     ):
         """Distribute tax pool equally to all users"""
@@ -1239,7 +1250,7 @@ class Points(commands.Cog):
 
             # Get all users with points in database
             users = await conn.fetch("SELECT user_id FROM users WHERE points > 0")
-            
+
             if not users:
                 await inter.followup.send("No users found in database!")
                 return
@@ -2653,7 +2664,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                 if tax_amount > 0:
                     msg += f" ({tax_amount} tax collected)"
                 msg += f" from {beggar_name}!"
-                
+
                 await inter.response.send_message(msg, ephemeral=False)
             else:
                 # Attacker loses - lose the amount to target
@@ -2694,7 +2705,6 @@ class AttackBeggarModal(disnake.ui.Modal):
                         ephemeral=False,
                     )
 
-
     @commands.Cog.listener()
     async def on_ready(self):
         """Start the daily tax task when bot is ready"""
@@ -2708,14 +2718,13 @@ class AttackBeggarModal(disnake.ui.Modal):
             return
 
         from datetime import date
+
         now_bangkok = datetime.datetime.now(BANGKOK_TZ)
         today_bangkok = now_bangkok.date()
 
         async with db.pool.acquire() as conn:
             # Reset cumulative attack gains for all users
-            await conn.execute(
-                "UPDATE users SET cumulative_attack_gains = 0"
-            )
+            await conn.execute("UPDATE users SET cumulative_attack_gains = 0")
 
             # Tax rich users (>3000 points) at 10%
             rich_users = await conn.fetch(
