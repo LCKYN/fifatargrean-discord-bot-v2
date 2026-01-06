@@ -122,7 +122,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 - `target`: User to attack
 - `amount`: Points to risk (100-200, default 100)
 **Mechanics:**
-- **If target has dodge:** Guaranteed success, gain 5x amount (minus 5% tax), dodge is consumed
+- **If target has dodge:** Guaranteed success, gain 10x amount (minus 5% tax), dodge is consumed
 - **If target has no dodge:** Guaranteed fail, lose 1x amount (5% tax)
 - **Cooldown:** 20 seconds (shared with regular attack)
 **Restrictions:** Same as regular attack
@@ -136,7 +136,8 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 **Details:**
 - Dodge is consumed when triggered (even if not attacked)
 - Not visible to others (strategic surprise)
-- Can counter pierce attacks for massive gains (5x)
+- Can counter pierce attacks for massive gains (10x)
+- Successfully dodging an attack counts toward your daily defense loss limit (1000 points/day)
 
 ### `/ceasefire`
 **Description:** Activate ceasefire to prevent all attacks
@@ -601,7 +602,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 ### Daily Caps
 - **Chat Earning:** 600 points/day
 - **Attack Gains:** 1000 points/day (cumulative from winning attacks)
-- **Defense Losses:** 1000 points/day (cumulative from being attacked)
+- **Defense Losses:** 1000 points/day (cumulative from being attacked, including successful dodges)
 
 ### Point Limits
 - **Stash:** Max 2000 points

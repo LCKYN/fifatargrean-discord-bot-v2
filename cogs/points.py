@@ -753,26 +753,6 @@ class Points(commands.Cog):
             await inter.response.send_message("You cannot attack bots.", ephemeral=True)
             return
 
-        # Check if target is a mod - can't attack mods
-        if inter.guild:
-            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
-            target_member = inter.guild.get_member(target.id)
-            if mod_role and target_member and mod_role in target_member.roles:
-                await inter.response.send_message(
-                    "⚖️ You cannot attack moderators!", ephemeral=True
-                )
-                return
-
-        # Check if attacker is a mod - mods can't attack
-        if inter.guild:
-            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
-            attacker_member = inter.guild.get_member(inter.author.id)
-            if mod_role and attacker_member and mod_role in attacker_member.roles:
-                await inter.response.send_message(
-                    "⚖️ Moderators cannot attack users!", ephemeral=True
-                )
-                return
-
         # Check if attacker has active ceasefire - break it if so
         attacker_broke_ceasefire = False
         if user_id in self.active_ceasefires:
@@ -970,8 +950,9 @@ class Points(commands.Cog):
                         inter.author.id,
                     )
                     # Target gains 2x points (minus tax) and track dodge profit
+                    # Reduce their defense losses by the gained amount to count against their daily defense limit
                     await conn.execute(
-                        "UPDATE users SET points = points + $1, profit_dodge = profit_dodge + $1 WHERE user_id = $2",
+                        "UPDATE users SET points = points + $1, profit_dodge = profit_dodge + $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
                         target_gain,
                         target.id,
                     )
@@ -1100,26 +1081,6 @@ class Points(commands.Cog):
             await inter.response.send_message("You cannot attack bots.", ephemeral=True)
             return
 
-        # Check if target is a mod - can't attack mods
-        if inter.guild:
-            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
-            target_member = inter.guild.get_member(target.id)
-            if mod_role and target_member and mod_role in target_member.roles:
-                await inter.response.send_message(
-                    "⚖️ You cannot attack moderators!", ephemeral=True
-                )
-                return
-
-        # Check if attacker is a mod - mods can't attack
-        if inter.guild:
-            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
-            attacker_member = inter.guild.get_member(inter.author.id)
-            if mod_role and attacker_member and mod_role in attacker_member.roles:
-                await inter.response.send_message(
-                    "⚖️ Moderators cannot attack users!", ephemeral=True
-                )
-                return
-
         # Check if attacker has active ceasefire - break it if so
         attacker_broke_ceasefire = False
         if user_id in self.active_ceasefires:
@@ -1207,12 +1168,12 @@ class Points(commands.Cog):
 
             if target_has_dodge:
                 # Pierce attack succeeds - target had dodge
-                # Calculate gains: 5x amount with 5% tax
-                total_gain = amount * 5
+                # Calculate gains: 10x amount with 5% tax
+                total_gain = amount * 10
                 tax_amount = int(total_gain * 0.05)
                 attacker_gain = total_gain - tax_amount
 
-                # Attacker gains 5x points (minus tax) from target and track pierce profit
+                # Attacker gains 10x points (minus tax) from target and track pierce profit
                 await conn.execute(
                     "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_pierce = profit_pierce + $1 WHERE user_id = $3",
                     attacker_gain,
@@ -1243,7 +1204,7 @@ class Points(commands.Cog):
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
 
-                msg = f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and gained {attacker_gain} {Config.POINT_NAME} (5x)"
+                msg = f"🎯 **Pierce successful!** You pierced {target.mention}'s dodge and gained {attacker_gain} {Config.POINT_NAME} (10x)"
                 if tax_amount > 0:
                     msg += f" ({tax_amount} tax)"
                 await inter.response.send_message(msg)
