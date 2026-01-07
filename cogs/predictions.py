@@ -146,6 +146,30 @@ class BetModal(disnake.ui.Modal):
                 ephemeral=True,
             )
 
+        # Send notification to prediction channel if bet >= 500
+        if amount >= 500:
+            try:
+                # Get prediction details for the notification
+                async with db.pool.acquire() as conn:
+                    pred_info = await conn.fetchrow(
+                        "SELECT channel_id, title FROM predictions WHERE id = $1",
+                        self.prediction_id,
+                    )
+                    choice_text = await conn.fetchval(
+                        "SELECT choice_text FROM prediction_choices WHERE prediction_id = $1 AND choice_number = $2",
+                        self.prediction_id,
+                        self.choice_number,
+                    )
+
+                if pred_info and choice_text:
+                    channel = inter.guild.get_channel(pred_info["channel_id"])
+                    if channel:
+                        await channel.send(
+                            f"🔥 **BIG BET!** {inter.author.mention} just bet **{amount:,} {Config.POINT_NAME}** on choice #{self.choice_number}: **{choice_text}**!"
+                        )
+            except Exception as e:
+                print(f"Error sending big bet notification: {e}")
+
 
 class PredictionView(disnake.ui.View):
     """View with buttons for each prediction choice"""
@@ -604,7 +628,7 @@ class Predictions(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         duration: int = commands.Param(
-            description="Duration in minutes (1-150)", ge=1, le=150
+            description="Duration in minutes (1-360)", ge=1, le=360
         ),
         choices: int = commands.Param(
             description="Number of choices (2-4)", ge=2, le=4, default=2
