@@ -838,8 +838,8 @@ class Points(commands.Cog):
                 # Dodge makes attacker always fail
                 success = False
             else:
-                # 45% success normally, 35% if attacking with more than 100 points
-                win_chance = 0.35 if amount > 100 else 0.45
+                # 45% base win chance regardless of attack amount
+                win_chance = 0.45
 
                 # Rich target bonus: +15% win chance when attacking players with >3000 points
                 if target_points > 3000:
@@ -2953,8 +2953,8 @@ class AttackBeggarModal(disnake.ui.Modal):
                 # Dodge makes attacker always fail
                 success = False
             else:
-                # 45% success for ≤100 points, 35% for >100 points
-                win_chance = 0.35 if amount > 100 else 0.45
+                # 45% base win chance regardless of attack amount
+                win_chance = 0.45
 
                 # Modify win chance based on beggar's points
                 if beggar_points > 1500:
