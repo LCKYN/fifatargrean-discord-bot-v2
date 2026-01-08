@@ -148,7 +148,7 @@ class AutoReply(commands.Cog):
             return
 
         # Check if this user already has an active auto-reply (as creator)
-        for (ch_id, target_id), (_, _, creator_id) in self.active_replies.items():
+        for (ch_id, target_id), (_, _, creator_id, _) in self.active_replies.items():
             if creator_id == inter.author.id:
                 target_member = inter.guild.get_member(target_id)
                 target_channel = self.bot.get_channel(ch_id)

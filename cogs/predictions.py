@@ -283,7 +283,7 @@ class CreatePredictionModal(disnake.ui.Modal):
             active_count = await conn.fetchval(
                 "SELECT COUNT(*) FROM predictions WHERE status = 'betting'"
             )
-            if active_count >= 5:
+            if active_count >= 10:
                 # Refund if charged
                 if not is_mod:
                     await conn.execute(
@@ -292,7 +292,7 @@ class CreatePredictionModal(disnake.ui.Modal):
                         inter.author.id,
                     )
                 await inter.response.send_message(
-                    "Maximum 5 active predictions reached. Please wait for one to finish.",
+                    "Maximum 10 active predictions reached. Please wait for one to finish.",
                     ephemeral=True,
                 )
                 return
@@ -628,7 +628,7 @@ class Predictions(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         duration: int = commands.Param(
-            description="Duration in minutes (1-360)", ge=1, le=360
+            description="Duration in minutes (1-480)", ge=1, le=480
         ),
         choices: int = commands.Param(
             description="Number of choices (2-4)", ge=2, le=4, default=2

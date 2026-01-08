@@ -820,6 +820,23 @@ class Points(commands.Cog):
                 )
                 return
 
+            # Check if target has active ceasefire
+            target_has_ceasefire = False
+            if target.id in self.active_ceasefires:
+                ceasefire_time = self.active_ceasefires[target.id]
+                if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                    target_has_ceasefire = True
+                else:
+                    # Expired ceasefire, clean up
+                    del self.active_ceasefires[target.id]
+
+            if target_has_ceasefire:
+                await inter.response.send_message(
+                    f"☮️ {target.mention} has an active ceasefire! They cannot be attacked right now.",
+                    ephemeral=True,
+                )
+                return
+
             # Check if target has active dodge
             target_has_dodge = False
             if target.id in self.active_dodges:
@@ -844,6 +861,15 @@ class Points(commands.Cog):
                 # Rich target bonus: +15% win chance when attacking players with >3000 points
                 if target_points > 3000:
                     win_chance += 0.15
+
+                # Ceasefire breaker debuff: +20% win chance when attacking someone who broke their ceasefire
+                if target.id in self.ceasefire_breakers:
+                    debuff_time = self.ceasefire_breakers[target.id]
+                    if (now - debuff_time).total_seconds() < 600:  # 10 minutes
+                        win_chance += 0.20
+                    else:
+                        # Expired debuff, clean up
+                        del self.ceasefire_breakers[target.id]
 
                 # Ensure win_chance stays within 0-1 range
                 win_chance = max(0.0, min(1.0, win_chance))
@@ -2931,6 +2957,23 @@ class AttackBeggarModal(disnake.ui.Modal):
             if beggar_points < amount:
                 await inter.response.send_message(
                     f"Target doesn't have enough {Config.POINT_NAME} (needs {amount:,}).",
+                    ephemeral=True,
+                )
+                return
+
+            # Check if beggar has active ceasefire
+            target_has_ceasefire = False
+            if self.beggar_id in self.points_cog.active_ceasefires:
+                ceasefire_time = self.points_cog.active_ceasefires[self.beggar_id]
+                if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                    target_has_ceasefire = True
+                else:
+                    # Expired ceasefire, clean up
+                    del self.points_cog.active_ceasefires[self.beggar_id]
+
+            if target_has_ceasefire:
+                await inter.response.send_message(
+                    f"☮️ Target has an active ceasefire! They cannot be attacked right now.",
                     ephemeral=True,
                 )
                 return
