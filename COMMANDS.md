@@ -21,7 +21,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 ### `/point`
 **Description:** Check your current points and statistics
 **Usage:** `/point`
-**Output:** Displays your current points, daily earned progress (0/600), attack gains (0/1000), defense losses (0/1000), and stashed points (0/2000)
+**Output:** Displays your current points, daily earned progress (0/600), attack gains (0/2000), defense losses (0/2000), and stashed points (0/5000)
 **Cooldown:** None
 **Visibility:** Ephemeral (only you can see)
 
@@ -44,10 +44,10 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 **Parameters:**
 - `amount`: Amount of points to deposit (minimum 1)
 **Details:**
-- Maximum stash capacity: 2000 points
+- Maximum stash capacity: 5000 points
 - Stashed points are safe from attacks
-- Earns 20% interest daily
-- Cannot exceed 2000 total stashed points
+- Earns 10% interest daily
+- Cannot exceed 5000 total stashed points
 
 ### `/stash withdraw`
 **Description:** Withdraw points from your stash
@@ -78,7 +78,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 - Total points, sent, received
 - Daily earned progress (0/600)
 - Attack/Defense stats (0/1000)
-- Stashed points (0/2000)
+- Stashed points (0/5000)
 - Attack win rates (≤100 pts and >100 pts)
 - Profit breakdown (Attack, Defense, Prediction, Guild War, Beg, Trap, Dodge, Pierce)
 - Active temporary roles with time remaining
@@ -86,6 +86,18 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 - Server join date
 
 **Auto-Delete:** If used outside shop channel, deletes after 30 seconds
+
+### `/attackhistory`
+**Description:** Show who attacked you in the last 24 hours
+**Usage:** `/attackhistory`
+**Output:**
+- List of recent attacks (up to 20)
+- Attack type (regular, pierce, dodge)
+- Success/failure status
+- Points gained/lost per attack
+- Time ago for each attack
+- Summary statistics (total attacks, successful, failed, total points lost)
+**Visibility:** Ephemeral (only you can see)
 
 ---
 
@@ -138,6 +150,22 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 - Not visible to others (strategic surprise)
 - Can counter pierce attacks for massive gains (10x)
 - Successfully dodging an attack counts toward your daily defense loss limit (1000 points/day)
+
+### `/shutup`
+**Description:** Timeout a user by sacrificing half your points
+**Usage:** `/shutup <target> <text>`
+**Condition:** You must have more points than the target
+**Cost:** Half of your points (50% to tax pool, 50% to target)
+**Effect:**
+- You lose half of your points
+- Half goes to tax pool, half goes to target
+- Target is timed out for 3 minutes
+- Custom message is displayed in the notification
+**Restrictions:**
+- Cannot target yourself
+- Cannot target bots
+- Cannot target moderators
+- Moderators cannot use this command
 
 ### `/ceasefire`
 **Description:** Activate ceasefire to prevent all attacks
@@ -196,7 +224,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 **Description:** Create a new prediction event
 **Usage:** `/predict duration:30 choices:2 max_bet:500`
 **Parameters:**
-- `duration`: Duration in minutes (1-150)
+- `duration`: Duration in minutes (1-720)
 - `choices`: Number of choices (2-4, default 2)
 - `max_bet`: (Optional) Maximum bet amount per user
 **Cost:** Configurable (default 200 points, free for mods)
@@ -592,7 +620,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 
 ### Daily Automated Tasks
 - **Tax Collection (>3000 points):** 10% daily tax on rich users, collected to tax pool
-- **Stash Interest:** 20% interest on stashed points (capped at 2000 max)
+- **Stash Interest:** 10% interest on stashed points (capped at 5000 max)
 - **Reset:** Cumulative attack gains and defense losses reset to 0 daily
 
 ---
@@ -605,7 +633,7 @@ Complete list of all available commands for the FIFA Targrean Discord Bot V2.
 - **Defense Losses:** 1000 points/day (cumulative from being attacked, including successful dodges)
 
 ### Point Limits
-- **Stash:** Max 2000 points
+- **Stash:** Max 5000 points
 - **Attack Amount:** 50-250 points per attack
 - **Beg Attack Amount:** 50-500 points per attack
 

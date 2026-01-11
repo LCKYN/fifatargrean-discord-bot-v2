@@ -467,7 +467,7 @@ class Points(commands.Cog):
             total_interest_paid = 0
             for user_row in stash_users:
                 stashed = user_row["stashed_points"]
-                interest = int(stashed * 0.20)
+                interest = int(stashed * 0.10)
 
                 # Pay interest to main points (stash stays same)
                 if interest > 0:
@@ -527,7 +527,7 @@ class Points(commands.Cog):
         if bot_channel:
             public_embed = disnake.Embed(
                 title="📊 Daily Tax & Interest (Manual)",
-                description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {taxed_count} users (10% tax on all users).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
+                description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {taxed_count} users (10% tax on all users).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (10% on stashed points).",
                 color=disnake.Color.blue(),
             )
             public_embed.add_field(
@@ -555,7 +555,7 @@ class Points(commands.Cog):
             return
 
         async with db.pool.acquire() as conn:
-            # Give 20% interest on stashed points
+            # Give 10% interest on stashed points
             stash_users = await conn.fetch(
                 "SELECT user_id, stashed_points FROM users WHERE stashed_points > 0"
             )
@@ -563,7 +563,7 @@ class Points(commands.Cog):
             total_interest_paid = 0
             for user_row in stash_users:
                 stashed = user_row["stashed_points"]
-                interest = int(stashed * 0.20)
+                interest = int(stashed * 0.10)
 
                 # Pay interest to main points (stash stays same)
                 if interest > 0:
@@ -577,7 +577,7 @@ class Points(commands.Cog):
         # Send response
         embed = disnake.Embed(
             title="✅ Interest Paid",
-            description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points)",
+            description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (10% on stashed points)",
             color=disnake.Color.green(),
         )
         await inter.followup.send(embed=embed, ephemeral=True)
@@ -587,7 +587,7 @@ class Points(commands.Cog):
         if bot_channel:
             public_embed = disnake.Embed(
                 title="💰 Stash Interest Paid",
-                description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
+                description=f"**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (10% on stashed points).",
                 color=disnake.Color.gold(),
             )
             await bot_channel.send(embed=public_embed)
@@ -609,7 +609,7 @@ class Points(commands.Cog):
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000\n💰 Stashed: {stashed}/2000",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000\n💰 Stashed: {stashed}/5000",
                 ephemeral=True,
             )
 
@@ -628,7 +628,7 @@ class Points(commands.Cog):
                 f"{user.mention} has {points} {Config.POINT_NAME}.", ephemeral=True
             )
 
-    @commands.slash_command(description="Stash points for safekeeping (max 2000)")
+    @commands.slash_command(description="Stash points for safekeeping (max 5000)")
     async def stash(self, inter: disnake.ApplicationCommandInteraction):
         """Stash command group"""
         pass
@@ -639,7 +639,7 @@ class Points(commands.Cog):
         inter: disnake.ApplicationCommandInteraction,
         amount: int = commands.Param(description="Amount to deposit", ge=1),
     ):
-        """Deposit points into stash (max 2000 total)"""
+        """Deposit points into stash (max 5000 total)"""
         async with db.pool.acquire() as conn:
             user_data = await conn.fetchrow(
                 "SELECT points, stashed_points FROM users WHERE user_id = $1",
@@ -663,11 +663,11 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Check if stash would exceed 2000
-            if stashed + amount > 2000:
-                max_deposit = 2000 - stashed
+            # Check if stash would exceed 5000
+            if stashed + amount > 5000:
+                max_deposit = 5000 - stashed
                 await inter.response.send_message(
-                    f"Your stash can only hold 2000 {Config.POINT_NAME}. You currently have {stashed} stashed. Maximum you can deposit: {max_deposit}",
+                    f"Your stash can only hold 5000 {Config.POINT_NAME}. You currently have {stashed} stashed. Maximum you can deposit: {max_deposit}",
                     ephemeral=True,
                 )
                 return
@@ -680,7 +680,7 @@ class Points(commands.Cog):
             )
 
             await inter.response.send_message(
-                f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/2000",
+                f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/5000",
                 ephemeral=True,
             )
 
@@ -714,7 +714,7 @@ class Points(commands.Cog):
             )
 
             await inter.response.send_message(
-                f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/2000",
+                f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/5000",
                 ephemeral=True,
             )
 
@@ -855,8 +855,7 @@ class Points(commands.Cog):
                 # Dodge makes attacker always fail
                 success = False
             else:
-                # 45% success normally, 35% if attacking with more than 100 points
-                win_chance = 0.35 if amount > 100 else 0.45
+                win_chance = 0.45
 
                 # Rich target bonus: +15% win chance when attacking players with >3000 points
                 if target_points > 3000:
@@ -927,6 +926,18 @@ class Points(commands.Cog):
                         inter.author.id,
                     )
 
+                # Log attack history
+                await conn.execute(
+                    "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    inter.author.id,
+                    target.id,
+                    "regular",
+                    amount,
+                    True,
+                    attacker_gain,
+                    amount,
+                )
+
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
 
@@ -982,6 +993,18 @@ class Points(commands.Cog):
                         target_gain,
                         target.id,
                     )
+
+                    # Log attack history (dodge)
+                    await conn.execute(
+                        "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        inter.author.id,
+                        target.id,
+                        "dodge",
+                        amount,
+                        False,
+                        0,
+                        loss_amount,
+                    )
                 else:
                     # Regular failed attack
                     loss_amount = amount
@@ -999,6 +1022,18 @@ class Points(commands.Cog):
                         "UPDATE users SET points = points + $1, profit_defense = profit_defense + $1 WHERE user_id = $2",
                         target_gain,
                         target.id,
+                    )
+
+                    # Log attack history (failed)
+                    await conn.execute(
+                        "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        inter.author.id,
+                        target.id,
+                        "regular",
+                        amount,
+                        False,
+                        0,
+                        amount,
                     )
 
                 # Add tax to pool
@@ -1227,6 +1262,18 @@ class Points(commands.Cog):
                         inter.author.id,
                     )
 
+                # Log attack history (pierce success)
+                await conn.execute(
+                    "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    inter.author.id,
+                    target.id,
+                    "pierce",
+                    amount,
+                    True,
+                    attacker_gain,
+                    total_gain,
+                )
+
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
 
@@ -1266,6 +1313,18 @@ class Points(commands.Cog):
                         "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
                         inter.author.id,
                     )
+
+                # Log attack history (pierce fail)
+                await conn.execute(
+                    "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    inter.author.id,
+                    target.id,
+                    "pierce",
+                    amount,
+                    False,
+                    0,
+                    amount,
+                )
 
                 # Update cooldown
                 self.attack_cooldowns[user_id] = now
@@ -1536,6 +1595,129 @@ class Points(commands.Cog):
             f"☮️ **Ceasefire activated!** (-50 {Config.POINT_NAME}) You are immune from all attacks for 15 minutes!",
             ephemeral=True,
         )
+
+    @commands.slash_command(
+        description="Timeout a user by sacrificing half your points"
+    )
+    async def shutup(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        target: disnake.Member = commands.Param(description="User to shut up"),
+        text: str = commands.Param(description="Message to display", max_length=200),
+    ):
+        """Shut up a user - you lose half your points (half to tax, half to target), target gets timed out for 3 minutes (must have more points than target)"""
+        # Can't shutup yourself
+        if target.id == inter.author.id:
+            await inter.response.send_message(
+                "You cannot shut yourself up.", ephemeral=True
+            )
+            return
+
+        # Can't shutup bots
+        if target.bot:
+            await inter.response.send_message(
+                "You cannot shut up bots.", ephemeral=True
+            )
+            return
+
+        # Check if target is a mod - can't shutup mods
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            if mod_role and mod_role in target.roles:
+                await inter.response.send_message(
+                    "⚖️ You cannot shut up moderators!", ephemeral=True
+                )
+                return
+
+        # Check if attacker is a mod - mods can't use this command
+        if inter.guild:
+            mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+            attacker_member = inter.guild.get_member(inter.author.id)
+            if mod_role and attacker_member and mod_role in attacker_member.roles:
+                await inter.response.send_message(
+                    "⚖️ Moderators cannot use this command!", ephemeral=True
+                )
+                return
+
+        async with db.pool.acquire() as conn:
+            # Get both users' points
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            target_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", target.id
+            )
+
+            attacker_points = attacker_points or 0
+            target_points = target_points or 0
+
+            # Check if attacker has more points than target
+            if attacker_points <= target_points:
+                await inter.response.send_message(
+                    f"❌ You need more {Config.POINT_NAME} than {target.mention} to shut them up! You have {attacker_points:,}, they have {target_points:,}.",
+                    ephemeral=True,
+                )
+                return
+
+            # Calculate half of attacker's points
+            points_lost = attacker_points // 2
+
+            if points_lost == 0:
+                await inter.response.send_message(
+                    f"❌ You don't have enough points to use this command.",
+                    ephemeral=True,
+                )
+                return
+
+            # Split the lost points: half to tax, half to target
+            to_tax = points_lost // 2
+            to_target = points_lost - to_tax  # Remaining goes to target
+
+            # Deduct half points from attacker
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                points_lost,
+                inter.author.id,
+            )
+
+            # Add half of the lost points to target
+            await conn.execute(
+                """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE
+                   SET points = users.points + $2""",
+                target.id,
+                to_target,
+            )
+
+            # Add remaining half to tax pool
+            await self.add_to_tax_pool(conn, to_tax)
+
+        # Timeout target for 3 minutes
+        try:
+            timeout_duration = datetime.timedelta(minutes=3)
+            await target.timeout(
+                duration=timeout_duration, reason=f"Shut up by {inter.author.name}"
+            )
+
+            # Send result to channel 1456204479203639340
+            notification_channel = self.bot.get_channel(1456204479203639340)
+            if notification_channel:
+                embed = disnake.Embed(
+                    title="🤐 SHUT UP!",
+                    description=f'{inter.author.mention} told {target.mention} to shut up!\n\n**"{text}"**\n\n{inter.author.mention} sacrificed **{points_lost:,} {Config.POINT_NAME}** (half their points):\n💰 {to_target:,} sent to {target.mention}\n🏛️ {to_tax:,} sent to tax pool\n\n{target.mention} is timed out for 3 minutes!',
+                    color=disnake.Color.orange(),
+                )
+                await notification_channel.send(embed=embed)
+
+            await inter.response.send_message(
+                f"🤐 Successfully shut up {target.mention}! You sacrificed {points_lost:,} {Config.POINT_NAME}, they received {to_target:,} and are timed out for 3 minutes.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await inter.response.send_message(
+                f"❌ Failed to timeout {target.mention}. They still lost {points_lost:,} {Config.POINT_NAME} though.\nError: {str(e)}",
+                ephemeral=True,
+            )
 
     @commands.slash_command(description="[MOD] Distribute tax pool to all users")
     async def taxairdrop(
@@ -2542,7 +2724,7 @@ class Points(commands.Cog):
         display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000\n💰 Stashed: {stashed}/2000",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000\n💰 Stashed: {stashed}/5000",
             inline=True,
         )
 
@@ -2676,6 +2858,109 @@ class Points(commands.Cog):
             await inter.delete_original_response()
         else:
             await inter.response.send_message(embed=embed)
+
+    @commands.slash_command(description="Show who attacked you in the last 24 hours")
+    async def attackhistory(self, inter: disnake.ApplicationCommandInteraction):
+        """Show attack history for the past 24 hours"""
+        async with db.pool.acquire() as conn:
+            # Get attacks against the user in the last 24 hours
+            attacks = await conn.fetch(
+                """SELECT attacker_id, attack_type, amount, success, points_gained, points_lost, timestamp
+                   FROM attack_history
+                   WHERE target_id = $1 AND timestamp > NOW() - INTERVAL '24 hours'
+                   ORDER BY timestamp DESC""",
+                inter.author.id,
+            )
+
+            if not attacks:
+                await inter.response.send_message(
+                    "🛡️ No one has attacked you in the last 24 hours!",
+                    ephemeral=True,
+                )
+                return
+
+            # Build embed
+            embed = disnake.Embed(
+                title=f"⚔️ Attack History (Last 24 Hours)",
+                description=f"Attacks against {inter.author.mention}",
+                color=disnake.Color.red(),
+            )
+
+            # Group attacks by attacker
+            from collections import defaultdict
+
+            attacker_stats = defaultdict(
+                lambda: {"total": 0, "success": 0, "failed": 0, "points_lost": 0}
+            )
+
+            attack_lines = []
+            for idx, attack in enumerate(attacks[:20], 1):  # Show max 20 attacks
+                attacker = inter.guild.get_member(attack["attacker_id"])
+                attacker_name = (
+                    attacker.mention if attacker else f"<@{attack['attacker_id']}>"
+                )
+
+                # Update stats
+                attacker_stats[attack["attacker_id"]]["total"] += 1
+                if attack["success"]:
+                    attacker_stats[attack["attacker_id"]]["success"] += 1
+                    attacker_stats[attack["attacker_id"]]["points_lost"] += attack[
+                        "points_lost"
+                    ]
+                else:
+                    attacker_stats[attack["attacker_id"]]["failed"] += 1
+
+                # Format attack type
+                attack_icon = (
+                    "⚔️"
+                    if attack["attack_type"] == "regular"
+                    else "🎯"
+                    if attack["attack_type"] == "pierce"
+                    else "🛡️"
+                )
+                success_icon = "✅" if attack["success"] else "❌"
+
+                # Calculate time ago
+                time_ago = datetime.datetime.now() - attack["timestamp"].replace(
+                    tzinfo=None
+                )
+                hours = int(time_ago.total_seconds() // 3600)
+                minutes = int((time_ago.total_seconds() % 3600) // 60)
+                time_str = (
+                    f"{hours}h {minutes}m ago" if hours > 0 else f"{minutes}m ago"
+                )
+
+                if attack["success"]:
+                    attack_lines.append(
+                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **-{attack['points_lost']}** {Config.POINT_NAME} ({time_str})"
+                    )
+                else:
+                    attack_lines.append(
+                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **+{attack['points_gained'] if attack['attack_type'] == 'dodge' else 0}** {Config.POINT_NAME} ({time_str})"
+                    )
+
+            embed.add_field(
+                name="📜 Recent Attacks",
+                value="\n".join(attack_lines) if attack_lines else "No attacks",
+                inline=False,
+            )
+
+            # Summary
+            total_attacks = len(attacks)
+            total_lost = sum(a["points_lost"] for a in attacks if a["success"])
+            successful_attacks = sum(1 for a in attacks if a["success"])
+
+            summary = f"**Total Attacks:** {total_attacks}\n**Successful:** {successful_attacks}\n**Failed:** {total_attacks - successful_attacks}\n**Total Lost:** {total_lost:,} {Config.POINT_NAME}"
+            embed.add_field(
+                name="📊 Summary",
+                value=summary,
+                inline=False,
+            )
+
+            await inter.response.send_message(embed=embed)
+            # Delete after 20 seconds
+            await asyncio.sleep(20)
+            await inter.delete_original_response()
 
     @commands.slash_command(description="Create a beg request")
     async def beg(self, inter: disnake.ApplicationCommandInteraction):
@@ -2996,8 +3281,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                 # Dodge makes attacker always fail
                 success = False
             else:
-                # 45% success for ≤100 points, 35% for >100 points
-                win_chance = 0.35 if amount > 100 else 0.45
+                win_chance = 0.45
 
                 # Modify win chance based on beggar's points
                 if beggar_points > 1500:

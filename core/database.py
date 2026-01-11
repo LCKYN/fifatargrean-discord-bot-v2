@@ -85,6 +85,17 @@ class Database:
                     points_bet INTEGER NOT NULL,
                     PRIMARY KEY (war_id, user_id)
                 );
+                CREATE TABLE IF NOT EXISTS attack_history (
+                    id SERIAL PRIMARY KEY,
+                    attacker_id BIGINT NOT NULL,
+                    target_id BIGINT NOT NULL,
+                    attack_type TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    success BOOLEAN NOT NULL,
+                    points_gained INTEGER NOT NULL,
+                    points_lost INTEGER NOT NULL,
+                    timestamp TIMESTAMP DEFAULT NOW()
+                );
             """)
 
             # Add new columns if they don't exist (migration for existing databases)

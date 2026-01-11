@@ -628,7 +628,7 @@ class Predictions(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
         duration: int = commands.Param(
-            description="Duration in minutes (1-480)", ge=1, le=480
+            description="Duration in minutes (1-720)", ge=1, le=720
         ),
         choices: int = commands.Param(
             description="Number of choices (2-4)", ge=2, le=4, default=2
