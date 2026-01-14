@@ -19,6 +19,7 @@ class Points(commands.Cog):
         self.bot = bot
         self.attack_cooldowns = {}  # Track last attack time per user
         self.beg_attack_cooldowns = {}  # Track last beg attack time per user
+        self.multiattack_cooldowns = {}  # Track last multiattack time per user
         self.trap_cooldowns = {}  # Track last trap time per user
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
         self.dodge_cooldowns = {}  # Track last dodge time per user
@@ -110,7 +111,7 @@ class Points(commands.Cog):
             now_bangkok = datetime.datetime.now(BANGKOK_TZ)
             today_bangkok = now_bangkok.date()
 
-            points_to_add = 10
+            points_to_add = 100
             is_first_of_day = False
 
             if not user:
@@ -150,7 +151,7 @@ class Points(commands.Cog):
 
                 # Check if first message of the day (Bangkok time)
                 if last_msg is None:
-                    points_to_add = 100
+                    points_to_add = 200
                     is_first_of_day = True
                     daily_earned = 0
                 else:
@@ -163,14 +164,14 @@ class Points(commands.Cog):
                         last_msg_bangkok = last_msg.astimezone(BANGKOK_TZ)
 
                     if last_msg_bangkok.date() < today_bangkok:
-                        points_to_add = 100
+                        points_to_add = 200
                         is_first_of_day = True
                         daily_earned = 0  # Reset daily earned for new day
                     else:
                         # Regular message, check cooldown (15 seconds)
                         if (now - last_msg.replace(tzinfo=None)).total_seconds() < 15:
                             return
-                        points_to_add = 10
+                        points_to_add = 100
 
                 # Check daily cap (600 points per day from chatting)
                 if daily_earned >= 600:
@@ -610,7 +611,7 @@ class Points(commands.Cog):
             # Cap display at 600 for users who earned more before cap change
             display_earned = min(daily_earned, 600)
             await inter.response.send_message(
-                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/2000\n🛡️ Defense losses: {cumulative_defense}/2000\n💰 Stashed: {stashed}/5000",
+                f"You have **{points:,} {Config.POINT_NAME}**\n📈 Today: {display_earned}/600 points earned\n⚔️ Attack gains: {cumulative_attack}/5000\n🛡️ Defense losses: {cumulative_defense}/5000\n💰 Stashed: {stashed}/10000",
                 ephemeral=True,
             )
 
@@ -725,7 +726,7 @@ class Points(commands.Cog):
         inter: disnake.ApplicationCommandInteraction,
         target: disnake.User = commands.Param(description="User to attack"),
         amount: int = commands.Param(
-            description="Points to risk (50-250)", ge=50, le=250, default=50
+            description="Points to risk (25-500)", ge=25, le=500, default=50
         ),
     ):
         # Check cooldown (20 seconds)
@@ -1114,6 +1115,383 @@ class Points(commands.Cog):
                         if tax_amount > 0:
                             msg += f" ({tax_amount} tax)"
                         await inter.response.send_message(msg)
+
+    @commands.slash_command(description="Attack a user multiple times in a row")
+    async def multiattack(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        target: disnake.User = commands.Param(description="User to attack"),
+        times: int = commands.Param(
+            description="Number of attacks (2-10)", ge=2, le=10
+        ),
+        amount: int = commands.Param(
+            description="Points to risk per attack (25-500)", ge=25, le=500, default=50
+        ),
+    ):
+        """Attack a user multiple times with 20 seconds between each attack"""
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+
+        # Check multiattack cooldown (5 minutes)
+        if user_id in self.multiattack_cooldowns:
+            time_passed = (now - self.multiattack_cooldowns[user_id]).total_seconds()
+            if time_passed < 300:  # 5 minutes
+                remaining_mins = int((300 - time_passed) / 60)
+                remaining_secs = int((300 - time_passed) % 60)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using multiattack again.",
+                    ephemeral=True,
+                )
+                return
+
+        # Can't attack yourself
+        if target.id == inter.author.id:
+            await inter.response.send_message(
+                "You cannot attack yourself.", ephemeral=True
+            )
+            return
+
+        # Can't attack bots
+        if target.bot:
+            await inter.response.send_message("You cannot attack bots.", ephemeral=True)
+            return
+
+        # Initial response
+        await inter.response.send_message(
+            f"⚔️ Starting multiattack: {times} attacks on {target.mention} with {amount} points each (30 seconds between attacks)...",
+            ephemeral=True,
+        )
+
+        # Send notification to channel (will auto-delete after 10 seconds)
+        notification_msg = await inter.channel.send(
+            f"⚔️ {target.mention} **INCOMING MULTIATTACK!** {inter.author.mention} is launching **{times} attacks** with **{amount} points** each (1 attack per 30 seconds)"
+        )
+
+        # Schedule deletion without blocking (so multiple multiattacks don't interfere)
+        async def delete_after_delay(msg):
+            await asyncio.sleep(10)
+            try:
+                await msg.delete()
+            except:
+                pass
+
+        asyncio.create_task(delete_after_delay(notification_msg))
+
+        # Track results
+        total_gained = 0
+        total_lost = 0
+        successful_attacks = 0
+        failed_attacks = 0
+
+        # Execute attacks
+        skipped_attacks = 0
+        for i in range(times):
+            # Wait 30 seconds between attacks (except first one)
+            if i > 0:
+                await asyncio.sleep(30)
+
+            # Perform single attack using same logic as regular attack
+            attack_result = await self._perform_single_attack(
+                inter.author, target, amount
+            )
+
+            if attack_result is None:
+                # Attack couldn't be performed (ceasefire, defense cap, etc.)
+                skipped_attacks += 1
+                continue
+
+            if attack_result["success"]:
+                total_gained += attack_result["gained"]
+                successful_attacks += 1
+            else:
+                total_lost += attack_result["lost"]
+                failed_attacks += 1
+
+        # Update multiattack cooldown
+        self.multiattack_cooldowns[user_id] = datetime.datetime.now()
+
+        # Send final summary
+        summary = f"🎯 **Multiattack Complete!**\n"
+        summary += f"**Attacks:** {successful_attacks + failed_attacks}/{times}\n"
+        if skipped_attacks > 0:
+            summary += (
+                f"**Skipped:** {skipped_attacks} (target had ceasefire/defense cap)\n"
+            )
+        summary += (
+            f"**Successful:** {successful_attacks} | **Failed:** {failed_attacks}\n"
+        )
+        if total_gained > 0:
+            summary += f"**Total Gained:** +{total_gained} {Config.POINT_NAME}\n"
+        if total_lost > 0:
+            summary += f"**Total Lost:** -{total_lost} {Config.POINT_NAME}\n"
+        net = total_gained - total_lost
+        summary += f"**Net:** {'+' if net > 0 else ''}{net} {Config.POINT_NAME}"
+
+        await inter.followup.send(summary, ephemeral=True)
+
+        # Send summary to attack channel
+        attack_channel = self.bot.get_channel(1456204479203639340)
+        if attack_channel:
+            embed = disnake.Embed(
+                title=f"🎯 Multiattack Complete: {inter.author.display_name} vs {target.display_name}",
+                description=f"{inter.author.mention} performed **{successful_attacks + failed_attacks}/{times}** attacks on {target.mention}",
+                color=disnake.Color.gold(),
+            )
+            results_value = f"✅ **Successful:** {successful_attacks}\n❌ **Failed:** {failed_attacks}"
+            if skipped_attacks > 0:
+                results_value += f"\n⏭️ **Skipped:** {skipped_attacks}"
+            embed.add_field(
+                name="Results",
+                value=results_value,
+                inline=True,
+            )
+            if total_gained > 0 or total_lost > 0:
+                embed.add_field(
+                    name="Points",
+                    value=f"{'📈 **Gained:** +' + str(total_gained) + ' ' + Config.POINT_NAME if total_gained > 0 else ''}\n{'📉 **Lost:** -' + str(total_lost) + ' ' + Config.POINT_NAME if total_lost > 0 else ''}\n💰 **Net:** {'+' if net > 0 else ''}{net} {Config.POINT_NAME}",
+                    inline=True,
+                )
+            await attack_channel.send(embed=embed)
+
+    async def _perform_single_attack(self, attacker, target, amount):
+        """Helper method to perform a single attack - returns result dict or None if attack couldn't be performed"""
+        now = datetime.datetime.now()
+        user_id = attacker.id
+
+        # Check if attacker has active ceasefire - break it if so
+        if user_id in self.active_ceasefires:
+            ceasefire_time = self.active_ceasefires[user_id]
+            active_duration = getattr(self, "active_ceasefire_durations", {}).get(
+                user_id, 600
+            )
+            if (now - ceasefire_time).total_seconds() < active_duration:
+                del self.active_ceasefires[user_id]
+                if (
+                    hasattr(self, "active_ceasefire_durations")
+                    and user_id in self.active_ceasefire_durations
+                ):
+                    del self.active_ceasefire_durations[user_id]
+
+                self.ceasefire_breakers[user_id] = now
+
+                notification_channel = self.bot.get_channel(1456204479203639340)
+                if notification_channel:
+                    embed = disnake.Embed(
+                        title="⚠️ Ceasefire Broken!",
+                        description=f"{attacker.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
+                        color=disnake.Color.red(),
+                    )
+                    await notification_channel.send(embed=embed)
+
+        async with db.pool.acquire() as conn:
+            attacker_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", attacker.id
+            )
+            target_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", target.id
+            )
+            target_defense_losses = await conn.fetchval(
+                "SELECT cumulative_defense_losses FROM users WHERE user_id = $1",
+                target.id,
+            )
+
+            attacker_points = attacker_points or 0
+            target_points = target_points or 0
+            target_defense_losses = target_defense_losses or 0
+
+            # Check if attacker/target has enough points
+            if attacker_points < amount or target_points < amount:
+                return None
+
+            # Check if target has already lost 5000 points today
+            if target_defense_losses >= 5000:
+                return None
+
+            # Check if target has active ceasefire
+            if target.id in self.active_ceasefires:
+                ceasefire_time = self.active_ceasefires[target.id]
+                active_duration = getattr(self, "active_ceasefire_durations", {}).get(
+                    target.id, 600
+                )
+                if (now - ceasefire_time).total_seconds() < active_duration:
+                    return None
+
+            # Check if target has active dodge
+            target_has_dodge = False
+            if target.id in self.active_dodges:
+                dodge_time = self.active_dodges[target.id]
+                if (now - dodge_time).total_seconds() < 300:
+                    target_has_dodge = True
+                    del self.active_dodges[target.id]
+
+            # Calculate success
+            if target_has_dodge:
+                success = False
+            else:
+                win_chance = 0.45
+                if target_points > 3000:
+                    win_chance += 0.15
+                if target.id in self.ceasefire_breakers:
+                    debuff_time = self.ceasefire_breakers[target.id]
+                    if (now - debuff_time).total_seconds() < 600:
+                        win_chance += 0.20
+                win_chance = max(0.0, min(1.0, win_chance))
+                success = random.random() < win_chance
+
+            if success:
+                attacker_cumulative = await conn.fetchval(
+                    "SELECT cumulative_attack_gains FROM users WHERE user_id = $1",
+                    attacker.id,
+                )
+                attacker_cumulative = attacker_cumulative or 0
+
+                if attacker_cumulative >= 5000:
+                    return None
+
+                actual_amount = min(amount, 5000 - attacker_cumulative)
+                tax_amount = int(actual_amount * 0.05)
+                attacker_gain = actual_amount - tax_amount
+
+                await conn.execute(
+                    "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_attack = profit_attack + $1 WHERE user_id = $3",
+                    attacker_gain,
+                    actual_amount,
+                    attacker.id,
+                )
+                await conn.execute(
+                    "UPDATE users SET points = points - $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
+                    actual_amount,
+                    target.id,
+                )
+                await self.add_to_tax_pool(conn, tax_amount)
+
+                if actual_amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1, attack_wins_high = attack_wins_high + 1 WHERE user_id = $1",
+                        attacker.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1, attack_wins_low = attack_wins_low + 1 WHERE user_id = $1",
+                        attacker.id,
+                    )
+
+                await conn.execute(
+                    "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    attacker.id,
+                    target.id,
+                    "regular",
+                    actual_amount,
+                    True,
+                    attacker_gain,
+                    actual_amount,
+                )
+
+                self.attack_last_use[user_id] = now
+
+                attack_channel = self.bot.get_channel(1456204479203639340)
+                if attack_channel:
+                    description = f"{attacker.mention} stole **{attacker_gain} {Config.POINT_NAME}** from {target.mention}!"
+                    if tax_amount > 0:
+                        description += f" ({tax_amount} tax)"
+                    embed = disnake.Embed(
+                        title="💥 Attack Successful!",
+                        description=description,
+                        color=disnake.Color.green(),
+                    )
+                    await attack_channel.send(embed=embed)
+
+                return {"success": True, "gained": attacker_gain, "lost": 0}
+            else:
+                if target_has_dodge:
+                    loss_amount = amount * 2
+                    tax_amount = int(loss_amount * 0.05)
+                    target_gain = loss_amount - tax_amount
+
+                    await conn.execute(
+                        "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $2 WHERE user_id = $3",
+                        loss_amount,
+                        amount,
+                        attacker.id,
+                    )
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1, profit_dodge = profit_dodge + $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
+                        target_gain,
+                        target.id,
+                    )
+
+                    await conn.execute(
+                        "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        attacker.id,
+                        target.id,
+                        "dodge",
+                        amount,
+                        False,
+                        target_gain,
+                        loss_amount,
+                    )
+                else:
+                    loss_amount = amount
+                    tax_amount = int(amount * 0.05)
+                    target_gain = amount - tax_amount
+
+                    await conn.execute(
+                        "UPDATE users SET points = points - $1, cumulative_attack_gains = cumulative_attack_gains - $1 WHERE user_id = $2",
+                        amount,
+                        attacker.id,
+                    )
+                    await conn.execute(
+                        "UPDATE users SET points = points + $1, profit_defense = profit_defense + $1 WHERE user_id = $2",
+                        target_gain,
+                        target.id,
+                    )
+
+                    await conn.execute(
+                        "INSERT INTO attack_history (attacker_id, target_id, attack_type, amount, success, points_gained, points_lost) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        attacker.id,
+                        target.id,
+                        "regular",
+                        amount,
+                        False,
+                        target_gain,
+                        amount,
+                    )
+
+                await self.add_to_tax_pool(conn, tax_amount)
+
+                if amount > 100:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_high = attack_attempts_high + 1 WHERE user_id = $1",
+                        attacker.id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET attack_attempts_low = attack_attempts_low + 1 WHERE user_id = $1",
+                        attacker.id,
+                    )
+
+                self.attack_last_use[user_id] = now
+
+                attack_channel = self.bot.get_channel(1456204479203639340)
+                if attack_channel:
+                    if target_has_dodge:
+                        description = f"{target.mention} dodged {attacker.mention}'s attack! {attacker.mention} lost **{loss_amount} {Config.POINT_NAME}** (2x penalty)!"
+                    else:
+                        description = f"{attacker.mention} failed to attack {target.mention} and lost **{amount} {Config.POINT_NAME}**!"
+                    if tax_amount > 0:
+                        description += f" ({tax_amount} tax collected)"
+                    embed = disnake.Embed(
+                        title="🛡️ Attack Dodged!"
+                        if target_has_dodge
+                        else "💔 Attack Failed!",
+                        description=description,
+                        color=disnake.Color.blue()
+                        if target_has_dodge
+                        else disnake.Color.red(),
+                    )
+                    await attack_channel.send(embed=embed)
+
+                return {"success": False, "gained": 0, "lost": loss_amount}
 
     @commands.slash_command(
         description="Pierce attack - 100% success vs dodge, 100% fail otherwise"
@@ -2775,7 +3153,7 @@ class Points(commands.Cog):
         display_earned = min(daily_earned, 600)
         embed.add_field(
             name=f"💰 {Config.POINT_NAME}",
-            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/2000\n🛡️ Defense: {cumulative_defense}/2000\n💰 Stashed: {stashed}/5000",
+            value=f"**{points:,}** points\n📤 Sent: {total_sent:,}\n📥 Received: {total_received:,}\n📈 Today: {display_earned}/600\n⚔️ Attack: {cumulative_attack}/5000\n🛡️ Defense: {cumulative_defense}/5000\n💰 Stashed: {stashed}/10000",
             inline=True,
         )
 
@@ -2876,8 +3254,13 @@ class Points(commands.Cog):
         # Check ceasefire
         if target.id in self.active_ceasefires:
             ceasefire_time = self.active_ceasefires[target.id]
-            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
-                remaining_secs = int(900 - (now - ceasefire_time).total_seconds())
+            ceasefire_duration = self.active_ceasefire_durations.get(
+                target.id, 600
+            )  # Default to 10 minutes
+            if (now - ceasefire_time).total_seconds() < ceasefire_duration:
+                remaining_secs = int(
+                    ceasefire_duration - (now - ceasefire_time).total_seconds()
+                )
                 remaining_mins = remaining_secs // 60
                 remaining_secs = remaining_secs % 60
                 active_effects.append(
@@ -2911,8 +3294,16 @@ class Points(commands.Cog):
             await inter.response.send_message(embed=embed)
 
     @commands.slash_command(description="Show who attacked you in the last 24 hours")
-    async def attackhistory(self, inter: disnake.ApplicationCommandInteraction):
+    async def attackhistory(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        user: disnake.User = commands.Param(
+            description="User to check (defaults to yourself)", default=None
+        ),
+    ):
         """Show attack history for the past 24 hours"""
+        target_user = user if user else inter.author
+
         async with db.pool.acquire() as conn:
             # Get attacks against the user in the last 24 hours
             attacks = await conn.fetch(
@@ -2920,12 +3311,12 @@ class Points(commands.Cog):
                    FROM attack_history
                    WHERE target_id = $1 AND timestamp > NOW() - INTERVAL '24 hours'
                    ORDER BY timestamp DESC""",
-                inter.author.id,
+                target_user.id,
             )
 
             if not attacks:
                 await inter.response.send_message(
-                    "🛡️ No one has attacked you in the last 24 hours!",
+                    f"🛡️ No one has attacked {target_user.mention} in the last 24 hours!",
                     ephemeral=True,
                 )
                 return
@@ -2933,7 +3324,7 @@ class Points(commands.Cog):
             # Build embed
             embed = disnake.Embed(
                 title=f"⚔️ Attack History (Last 24 Hours)",
-                description=f"Attacks against {inter.author.mention}",
+                description=f"Attacks against {target_user.mention}",
                 color=disnake.Color.red(),
             )
 
