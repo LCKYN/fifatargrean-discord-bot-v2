@@ -2941,59 +2941,51 @@ class Points(commands.Cog):
             from collections import defaultdict
 
             attacker_stats = defaultdict(
-                lambda: {"total": 0, "success": 0, "failed": 0, "points_lost": 0}
+                lambda: {"total": 0, "points_lost": 0, "points_gained": 0}
             )
 
-            attack_lines = []
-            for idx, attack in enumerate(attacks[:20], 1):  # Show max 20 attacks
-                attacker = inter.guild.get_member(attack["attacker_id"])
-                attacker_name = (
-                    attacker.mention if attacker else f"<@{attack['attacker_id']}>"
-                )
+            # Collect stats per attacker
+            for attack in attacks:
+                attacker_id = attack["attacker_id"]
+                attacker_stats[attacker_id]["total"] += 1
 
-                # Update stats
-                attacker_stats[attack["attacker_id"]]["total"] += 1
                 if attack["success"]:
-                    attacker_stats[attack["attacker_id"]]["success"] += 1
-                    attacker_stats[attack["attacker_id"]]["points_lost"] += attack[
-                        "points_lost"
-                    ]
+                    # Attacker won - defender lost points
+                    attacker_stats[attacker_id]["points_lost"] += attack["points_lost"]
                 else:
-                    attacker_stats[attack["attacker_id"]]["failed"] += 1
+                    # Attacker failed - defender gained points
+                    points_gained = attack["points_gained"] or 0
+                    attacker_stats[attacker_id]["points_gained"] += points_gained
 
-                # Format attack type
-                attack_icon = (
-                    "⚔️"
-                    if attack["attack_type"] == "regular"
-                    else "🎯"
-                    if attack["attack_type"] == "pierce"
-                    else "🛡️"
-                )
-                success_icon = "✅" if attack["success"] else "❌"
+            # Build summary lines grouped by attacker
+            attack_lines = []
+            for attacker_id, stats in sorted(
+                attacker_stats.items(), key=lambda x: x[1]["total"], reverse=True
+            ):
+                attacker = inter.guild.get_member(attacker_id)
+                attacker_name = attacker.mention if attacker else f"<@{attacker_id}>"
 
-                # Calculate time ago
-                time_ago = datetime.datetime.now() - attack["timestamp"].replace(
-                    tzinfo=None
-                )
-                hours = int(time_ago.total_seconds() // 3600)
-                minutes = int((time_ago.total_seconds() % 3600) // 60)
-                time_str = (
-                    f"{hours}h {minutes}m ago" if hours > 0 else f"{minutes}m ago"
-                )
+                # Calculate net result
+                net_points = stats["points_gained"] - stats["points_lost"]
 
-                if attack["success"]:
+                if net_points > 0:
+                    # You gained overall
                     attack_lines.append(
-                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **-{attack['points_lost']}** {Config.POINT_NAME} ({time_str})"
+                        f"{attacker_name} attacked **{stats['total']}x** → **+{net_points}** {Config.POINT_NAME}"
+                    )
+                elif net_points < 0:
+                    # You lost overall
+                    attack_lines.append(
+                        f"{attacker_name} attacked **{stats['total']}x** → **{net_points}** {Config.POINT_NAME}"
                     )
                 else:
-                    # For failed attacks, show the points gained by defender
-                    points_gained = attack["points_gained"] or 0
+                    # Broke even
                     attack_lines.append(
-                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **+{points_gained}** {Config.POINT_NAME} ({time_str})"
+                        f"{attacker_name} attacked **{stats['total']}x** → **±0** {Config.POINT_NAME}"
                     )
 
             embed.add_field(
-                name="📜 Recent Attacks",
+                name="📜 Attack Summary by User",
                 value="\n".join(attack_lines) if attack_lines else "No attacks",
                 inline=False,
             )
