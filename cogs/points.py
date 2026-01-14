@@ -23,6 +23,7 @@ class Points(commands.Cog):
         self.active_traps = {}  # {channel_id: {trigger_text: (creator_id, created_at)}}
         self.dodge_cooldowns = {}  # Track last dodge time per user
         self.active_dodges = {}  # {user_id: activated_at}
+        self.attack_last_use = {}  # Track last attack time to block dodge for 5 minutes
         self.ceasefire_cooldowns = {}  # Track last ceasefire time per user
         self.active_ceasefires = {}  # {user_id: activated_at}
         self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
@@ -663,11 +664,11 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Check if stash would exceed 5000
-            if stashed + amount > 5000:
-                max_deposit = 5000 - stashed
+            # Check if stash would exceed 10000
+            if stashed + amount > 10000:
+                max_deposit = 10000 - stashed
                 await inter.response.send_message(
-                    f"Your stash can only hold 5000 {Config.POINT_NAME}. You currently have {stashed} stashed. Maximum you can deposit: {max_deposit}",
+                    f"Your stash can only hold 10000 {Config.POINT_NAME}. You currently have {stashed} stashed. Maximum you can deposit: {max_deposit}",
                     ephemeral=True,
                 )
                 return
@@ -680,7 +681,7 @@ class Points(commands.Cog):
             )
 
             await inter.response.send_message(
-                f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/5000",
+                f"💰 Successfully deposited **{amount} {Config.POINT_NAME}** to your stash!\\nStashed: {stashed + amount}/10000",
                 ephemeral=True,
             )
 
@@ -714,7 +715,7 @@ class Points(commands.Cog):
             )
 
             await inter.response.send_message(
-                f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/5000",
+                f"💰 Successfully withdrew **{amount} {Config.POINT_NAME}** from your stash!\\nStashed: {stashed - amount}/10000",
                 ephemeral=True,
             )
 
@@ -812,10 +813,10 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Check if target has already lost 2000 points today from being attacked
-            if target_defense_losses >= 2000:
+            # Check if target has already lost 5000 points today from being attacked
+            if target_defense_losses >= 5000:
                 await inter.response.send_message(
-                    f"🛡️ {target.mention} has already lost 2000 {Config.POINT_NAME} from being attacked today. They cannot be attacked anymore.",
+                    f"🛡️ {target.mention} has already lost 5000 {Config.POINT_NAME} from being attacked today. They cannot be attacked anymore.",
                     ephemeral=True,
                 )
                 return
@@ -824,11 +825,19 @@ class Points(commands.Cog):
             target_has_ceasefire = False
             if target.id in self.active_ceasefires:
                 ceasefire_time = self.active_ceasefires[target.id]
-                if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
+                active_duration = getattr(self, "active_ceasefire_durations", {}).get(
+                    target.id, 600
+                )
+                if (now - ceasefire_time).total_seconds() < active_duration:
                     target_has_ceasefire = True
                 else:
                     # Expired ceasefire, clean up
                     del self.active_ceasefires[target.id]
+                    if (
+                        hasattr(self, "active_ceasefire_durations")
+                        and target.id in self.active_ceasefire_durations
+                    ):
+                        del self.active_ceasefire_durations[target.id]
 
             if target_has_ceasefire:
                 await inter.response.send_message(
@@ -876,23 +885,23 @@ class Points(commands.Cog):
                 success = random.random() < win_chance
 
             if success:
-                # Check cumulative attack gains cap (2000)
+                # Check cumulative attack gains cap (5000)
                 attacker_cumulative = await conn.fetchval(
                     "SELECT cumulative_attack_gains FROM users WHERE user_id = $1",
                     inter.author.id,
                 )
                 attacker_cumulative = attacker_cumulative or 0
 
-                if attacker_cumulative >= 2000:
+                if attacker_cumulative >= 5000:
                     await inter.response.send_message(
-                        f"⚠️ You've reached your cumulative attack limit of 2000 {Config.POINT_NAME}! Come back tomorrow.",
+                        f"⚠️ You've reached your cumulative attack limit of 5000 {Config.POINT_NAME}! Come back tomorrow.",
                         ephemeral=True,
                     )
                     return
 
                 # Check if attacker would exceed cap
-                if attacker_cumulative + amount > 2000:
-                    amount = 2000 - attacker_cumulative
+                if attacker_cumulative + amount > 5000:
+                    amount = 5000 - attacker_cumulative
 
                 # Calculate 5% tax
                 tax_amount = int(amount * 0.05)
@@ -938,8 +947,9 @@ class Points(commands.Cog):
                     amount,
                 )
 
-                # Update cooldown
+                # Update cooldown and track attack use (to block dodge for 5 minutes)
                 self.attack_cooldowns[user_id] = now
+                self.attack_last_use[user_id] = now
 
                 # Send result to channel 1456204479203639340
                 attack_channel = self.bot.get_channel(1456204479203639340)
@@ -1002,7 +1012,7 @@ class Points(commands.Cog):
                         "dodge",
                         amount,
                         False,
-                        0,
+                        target_gain,
                         loss_amount,
                     )
                 else:
@@ -1032,7 +1042,7 @@ class Points(commands.Cog):
                         "regular",
                         amount,
                         False,
-                        0,
+                        target_gain,
                         amount,
                     )
 
@@ -1051,8 +1061,9 @@ class Points(commands.Cog):
                         inter.author.id,
                     )
 
-                # Update cooldown
+                # Update cooldown and track attack use (to block dodge for 5 minutes)
                 self.attack_cooldowns[user_id] = now
+                self.attack_last_use[user_id] = now
 
                 # Send result to channel 1456204479203639340
                 attack_channel = self.bot.get_channel(1456204479203639340)
@@ -1322,7 +1333,7 @@ class Points(commands.Cog):
                     "pierce",
                     amount,
                     False,
-                    0,
+                    target_gain,
                     amount,
                 )
 
@@ -1481,6 +1492,19 @@ class Points(commands.Cog):
         now = datetime.datetime.now()
         user_id = inter.author.id
 
+        # Check if attack was used within 5 minutes
+        if user_id in self.attack_last_use:
+            time_passed = (now - self.attack_last_use[user_id]).total_seconds()
+            if time_passed < 300:  # 5 minutes
+                remaining_secs = int(300 - time_passed)
+                remaining_mins = remaining_secs // 60
+                remaining_secs = remaining_secs % 60
+                await inter.response.send_message(
+                    f"⏰ You can't use dodge for {remaining_mins}m {remaining_secs}s after using attack command.",
+                    ephemeral=True,
+                )
+                return
+
         # Check cooldown (15 minutes)
         if user_id in self.dodge_cooldowns:
             time_passed = (now - self.dodge_cooldowns[user_id]).total_seconds()
@@ -1538,17 +1562,34 @@ class Points(commands.Cog):
     async def ceasefire(
         self,
         inter: disnake.ApplicationCommandInteraction,
+        duration: str = commands.Param(
+            description="Duration: normal (10min) or fullday (1440min)",
+            choices=["normal", "fullday"],
+            default="normal",
+        ),
     ):
-        """Activate ceasefire to be immune from attacks (costs 50 points, lasts 15 minutes)"""
+        """Activate ceasefire to be immune from attacks (costs 100 points for 10 min, or 3000 points for fullday)"""
         now = datetime.datetime.now()
         user_id = inter.author.id
 
-        # Check cooldown (30 minutes)
+        # Set duration and cost based on choice
+        if duration == "fullday":
+            cost = 3000
+            duration_seconds = 86400  # 1440 minutes = 24 hours
+            cooldown_seconds = 600  # 10 minutes
+            duration_display = "24 hours (1440 minutes)"
+        else:  # normal
+            cost = 100
+            duration_seconds = 600  # 10 minutes
+            cooldown_seconds = 600  # 10 minutes
+            duration_display = "10 minutes"
+
+        # Check cooldown (10 minutes)
         if user_id in self.ceasefire_cooldowns:
             time_passed = (now - self.ceasefire_cooldowns[user_id]).total_seconds()
-            if time_passed < 1800:  # 30 minutes
-                remaining_mins = int((1800 - time_passed) / 60)
-                remaining_secs = int((1800 - time_passed) % 60)
+            if time_passed < cooldown_seconds:
+                remaining_mins = int((cooldown_seconds - time_passed) / 60)
+                remaining_secs = int((cooldown_seconds - time_passed) % 60)
                 await inter.response.send_message(
                     f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using ceasefire again.",
                     ephemeral=True,
@@ -1558,8 +1599,14 @@ class Points(commands.Cog):
         # Check if already has active ceasefire
         if user_id in self.active_ceasefires:
             ceasefire_time = self.active_ceasefires[user_id]
-            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
-                remaining_secs = int(900 - (now - ceasefire_time).total_seconds())
+            # Check against the currently active duration (could be normal or fullday)
+            active_duration = getattr(self, "active_ceasefire_durations", {}).get(
+                user_id, 600
+            )
+            if (now - ceasefire_time).total_seconds() < active_duration:
+                remaining_secs = int(
+                    active_duration - (now - ceasefire_time).total_seconds()
+                )
                 remaining_mins = remaining_secs // 60
                 remaining_secs = remaining_secs % 60
                 await inter.response.send_message(
@@ -1574,25 +1621,29 @@ class Points(commands.Cog):
             )
             user_points = user_points or 0
 
-            if user_points < 50:
+            if user_points < cost:
                 await inter.response.send_message(
-                    f"You need at least 50 {Config.POINT_NAME} to activate ceasefire.",
+                    f"You need at least {cost} {Config.POINT_NAME} to activate ceasefire.",
                     ephemeral=True,
                 )
                 return
 
-            # Deduct 50 points
+            # Deduct points
             await conn.execute(
-                "UPDATE users SET points = points - 50 WHERE user_id = $1",
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                cost,
                 inter.author.id,
             )
 
-        # Activate ceasefire
+        # Activate ceasefire and track duration
         self.active_ceasefires[user_id] = now
         self.ceasefire_cooldowns[user_id] = now
+        if not hasattr(self, "active_ceasefire_durations"):
+            self.active_ceasefire_durations = {}
+        self.active_ceasefire_durations[user_id] = duration_seconds
 
         await inter.response.send_message(
-            f"☮️ **Ceasefire activated!** (-50 {Config.POINT_NAME}) You are immune from all attacks for 15 minutes!",
+            f"☮️ **Ceasefire activated!** (-{cost} {Config.POINT_NAME}) You are immune from all attacks for {duration_display}!",
             ephemeral=True,
         )
 
@@ -2935,8 +2986,10 @@ class Points(commands.Cog):
                         f"{idx}. {attack_icon} {attacker_name} {success_icon} **-{attack['points_lost']}** {Config.POINT_NAME} ({time_str})"
                     )
                 else:
+                    # For failed attacks, show the points gained by defender
+                    points_gained = attack["points_gained"] or 0
                     attack_lines.append(
-                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **+{attack['points_gained'] if attack['attack_type'] == 'dodge' else 0}** {Config.POINT_NAME} ({time_str})"
+                        f"{idx}. {attack_icon} {attacker_name} {success_icon} **+{points_gained}** {Config.POINT_NAME} ({time_str})"
                     )
 
             embed.add_field(
@@ -3429,22 +3482,49 @@ class AttackBeggarModal(disnake.ui.Modal):
                     )
                     total_interest_paid += interest
 
-            # Tax all users at 10%
+            # Tax all users with progressive rates based on points + stash
             all_users = await conn.fetch(
-                "SELECT user_id, points, last_rich_tax_date FROM users WHERE points > 0"
+                "SELECT user_id, points, stashed_points, last_rich_tax_date FROM users"
             )
 
             total_tax_collected = 0
+            taxed_users = 0
             for user_row in all_users:
                 # Check if already taxed today
                 last_tax_date = user_row["last_rich_tax_date"]
                 if last_tax_date == today_bangkok:
                     continue
 
-                user_points = user_row["points"]
-                tax_amount = int(user_points * 0.10)
+                user_points = user_row["points"] or 0
+                stashed_points = user_row["stashed_points"] or 0
+                total_wealth = user_points + stashed_points
 
-                # Deduct tax from user
+                # Progressive tax brackets
+                if total_wealth < 500:
+                    tax_rate = 0.0
+                elif total_wealth < 1000:
+                    tax_rate = 0.05
+                elif total_wealth < 2500:
+                    tax_rate = 0.10
+                elif total_wealth < 5000:
+                    tax_rate = 0.15
+                elif total_wealth < 7500:
+                    tax_rate = 0.20
+                else:
+                    tax_rate = 0.20  # 20% for 7500+
+
+                if tax_rate == 0.0:
+                    # Still mark as taxed but no tax collected
+                    await conn.execute(
+                        "UPDATE users SET last_rich_tax_date = $1 WHERE user_id = $2",
+                        today_bangkok,
+                        user_row["user_id"],
+                    )
+                    continue
+
+                tax_amount = int(user_points * tax_rate)
+
+                # Deduct tax from user (points can go negative if not enough)
                 await conn.execute(
                     "UPDATE users SET points = points - $1, last_rich_tax_date = $2 WHERE user_id = $3",
                     tax_amount,
@@ -3453,6 +3533,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                 )
 
                 total_tax_collected += tax_amount
+                taxed_users += 1
 
             # Add to tax pool
             if total_tax_collected > 0:
@@ -3463,7 +3544,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                 if bot_channel:
                     embed = disnake.Embed(
                         title="📊 Daily Tax & Interest",
-                        description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {len(all_users)} users (10% tax on all users).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
+                        description=f"**Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME} from {taxed_users} users (progressive tax: 0-20% based on total wealth).\n**Interest Paid:** {total_interest_paid:,} {Config.POINT_NAME} to {len(stash_users)} users (20% on stashed points).",
                         color=disnake.Color.blue(),
                     )
                     embed.add_field(
