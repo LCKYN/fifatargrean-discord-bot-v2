@@ -3905,7 +3905,7 @@ class AttackBeggarModal(disnake.ui.Modal):
                     )
                     continue
 
-                tax_amount = int(user_points * tax_rate)
+                tax_amount = int(total_wealth * tax_rate)
 
                 # Deduct tax from user (points can go negative if not enough)
                 await conn.execute(
