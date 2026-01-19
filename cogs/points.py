@@ -31,6 +31,7 @@ class Points(commands.Cog):
         self.active_ceasefire_durations = {}  # {user_id: duration_in_seconds}
         self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
+        self.lottery_entries = {}  # {number: [user_ids]} - current lottery entries
 
     def cog_unload(self):
         self.daily_tax_task.cancel()
@@ -55,6 +56,30 @@ class Points(commands.Cog):
         """Set tax pool to specific amount"""
         await conn.execute(
             """INSERT INTO bot_settings (key, value) VALUES ('tax_pool', $1)
+               ON CONFLICT (key) DO UPDATE SET value = $1::TEXT""",
+            str(amount),
+        )
+
+    async def get_lottery_pool(self, conn) -> int:
+        """Get current lottery prize pool"""
+        pool = await conn.fetchval(
+            "SELECT value FROM bot_settings WHERE key = 'lottery_pool'"
+        )
+        return int(pool) if pool else 0
+
+    async def add_to_lottery_pool(self, conn, amount: int):
+        """Add amount to lottery pool"""
+        await conn.execute(
+            """INSERT INTO bot_settings (key, value) VALUES ('lottery_pool', $1::TEXT)
+               ON CONFLICT (key) DO UPDATE SET value = (COALESCE(CAST(bot_settings.value AS INTEGER), 0) + $2)::TEXT""",
+            str(amount),
+            amount,
+        )
+
+    async def set_lottery_pool(self, conn, amount: int):
+        """Set lottery pool to specific amount"""
+        await conn.execute(
+            """INSERT INTO bot_settings (key, value) VALUES ('lottery_pool', $1)
                ON CONFLICT (key) DO UPDATE SET value = $1::TEXT""",
             str(amount),
         )
@@ -389,6 +414,14 @@ class Points(commands.Cog):
 
         trigger_lower = trigger.lower()
 
+        # Check if trap already exists in this channel FIRST
+        trap_already_exists = False
+        if inter.channel.id in self.active_traps:
+            if trigger_lower in [
+                t.lower() for t in self.active_traps[inter.channel.id]
+            ]:
+                trap_already_exists = True
+
         # Check if user has enough points to set a trap
         async with db.pool.acquire() as conn:
             user_points = await conn.fetchval(
@@ -403,43 +436,427 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Deduct cost for setting trap
-            await conn.execute(
-                "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                cost,
+            # Only deduct cost if trap doesn't already exist
+            if not trap_already_exists:
+                await conn.execute(
+                    "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                    cost,
+                    inter.author.id,
+                )
+
+        # Set the trap only if it doesn't already exist
+        if not trap_already_exists:
+            if inter.channel.id not in self.active_traps:
+                self.active_traps[inter.channel.id] = {}
+
+            self.active_traps[inter.channel.id][trigger] = (
                 inter.author.id,
+                datetime.datetime.now(),
+                cost,  # Store the cost with the trap
             )
 
-        # Check if trap already exists in this channel
-        if inter.channel.id in self.active_traps:
-            if trigger_lower in [
-                t.lower() for t in self.active_traps[inter.channel.id]
-            ]:
-                await inter.response.send_message(
-                    "A trap with this trigger already exists in this channel.",
-                    ephemeral=True,
-                )
-                return
+            # Update cooldown
+            self.trap_cooldowns[user_id] = now
 
-        # Set the trap
-        if inter.channel.id not in self.active_traps:
-            self.active_traps[inter.channel.id] = {}
-
-        self.active_traps[inter.channel.id][trigger] = (
-            inter.author.id,
-            datetime.datetime.now(),
-            cost,  # Store the cost with the trap
-        )
-
-        # Update cooldown
-        self.trap_cooldowns[user_id] = now
-
+        # Always show the success message regardless of whether trap was actually set
         loss_amount = cost * 5
         gain_amount = cost * 5
         await inter.response.send_message(
             f'💣 Trap set! (-{cost} {Config.POINT_NAME}) Anyone who types **"{trigger}"** in this channel within 15 minutes will lose {loss_amount} {Config.POINT_NAME} and you\'ll gain {gain_amount} {Config.POINT_NAME}!',
             ephemeral=True,
         )
+
+    @commands.slash_command(description="Counter a trap by guessing the trigger word")
+    async def trapcounter(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        trigger: str = commands.Param(
+            description="Guess the trap trigger word",
+            min_length=5,
+            max_length=50,
+        ),
+        cost: int = commands.Param(
+            description="Cost to counter (you gain 10x if correct)",
+            ge=10,
+            le=500,
+            default=40,
+        ),
+    ):
+        """Try to counter a trap - if you guess the exact trigger, steal 10x cost from trap setter"""
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < cost:
+                await inter.response.send_message(
+                    f"You need at least {cost} {Config.POINT_NAME} to attempt a counter.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct cost from counter user
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                cost,
+                inter.author.id,
+            )
+
+        # Check if there's an active trap in this channel with exact trigger match
+        if inter.channel.id not in self.active_traps:
+            await inter.response.send_message(
+                f"❌ No trap found! You lost {cost} {Config.POINT_NAME}.",
+                ephemeral=True,
+            )
+            return
+
+        channel_traps = self.active_traps[inter.channel.id]
+
+        # Look for exact match (case-sensitive)
+        trap_found = None
+        trap_creator_id = None
+        trap_cost = None
+
+        for trap_trigger, trap_data in channel_traps.items():
+            if trap_trigger == trigger:  # Exact match
+                trap_found = trap_trigger
+                if len(trap_data) == 2:
+                    trap_creator_id, created_at = trap_data
+                    trap_cost = 40  # Default
+                else:
+                    trap_creator_id, created_at, trap_cost = trap_data
+                break
+
+        if not trap_found:
+            await inter.response.send_message(
+                f"❌ No trap with that exact trigger! You lost {cost} {Config.POINT_NAME}.",
+                ephemeral=True,
+            )
+            return
+
+        # Can't counter your own trap
+        if trap_creator_id == inter.author.id:
+            # Refund the cost
+            async with db.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET points = points + $1 WHERE user_id = $2",
+                    cost,
+                    inter.author.id,
+                )
+            await inter.response.send_message(
+                "❌ You can't counter your own trap! (Cost refunded)",
+                ephemeral=True,
+            )
+            return
+
+        # Success! Counter the trap
+        gain_amount = cost * 10
+        tax_amount = int(gain_amount * 0.10)
+        net_gain = gain_amount - tax_amount
+
+        async with db.pool.acquire() as conn:
+            # Counter user gains 10x their cost minus 10% tax
+            await conn.execute(
+                """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
+                inter.author.id,
+                net_gain,
+            )
+
+            # Trap setter loses 10x counter cost (can go negative)
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                gain_amount,
+                trap_creator_id,
+            )
+
+            # Add tax to pool
+            await self.add_to_tax_pool(conn, tax_amount)
+
+        # Remove the trap
+        del channel_traps[trap_found]
+        if not channel_traps:
+            del self.active_traps[inter.channel.id]
+
+        # Notify success
+        trap_setter = inter.guild.get_member(trap_creator_id)
+        trap_setter_name = (
+            trap_setter.display_name if trap_setter else f"User {trap_creator_id}"
+        )
+
+        # Send notification to channel 1456204479203639340
+        notification_channel = self.bot.get_channel(1456204479203639340)
+        if notification_channel:
+            embed = disnake.Embed(
+                title="🎯 TRAP COUNTERED!",
+                description=f"{inter.author.mention} successfully countered **{trap_setter_name}**'s trap!\n\n"
+                f'**Trigger:** "{trap_found}"\n'
+                f"**Counter Cost:** {cost} {Config.POINT_NAME}\n"
+                f"**Gained:** {net_gain} {Config.POINT_NAME} (10x - 10% tax)\n"
+                f"**Tax Collected:** {tax_amount} {Config.POINT_NAME}\n"
+                f"**Trap Setter Lost:** {gain_amount} {Config.POINT_NAME}",
+                color=disnake.Color.green(),
+            )
+            await notification_channel.send(embed=embed)
+
+        await inter.response.send_message(
+            f"🎯 **TRAP COUNTERED!** {inter.author.mention} found **{trap_setter_name}**'s trap!\n"
+            f"💰 Gained **{net_gain} {Config.POINT_NAME}** (10x - 10% tax)\n"
+            f'💣 Trap removed: **"{trap_found}"**',
+            ephemeral=False,
+        )
+
+        # Delete the response after 10 seconds
+        await asyncio.sleep(10)
+        await inter.delete_original_response()
+
+    @commands.slash_command(
+        description="Check how many traps are active (costs 100 points)"
+    )
+    async def checktrap(self, inter: disnake.ApplicationCommandInteraction):
+        """Pay 100 points to see how many traps are active in this channel"""
+        cost = 100
+
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < cost:
+                await inter.response.send_message(
+                    f"You need at least {cost} {Config.POINT_NAME} to check traps.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct cost
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                cost,
+                inter.author.id,
+            )
+
+        # Count active traps in this channel
+        trap_count = 0
+        if inter.channel.id in self.active_traps:
+            trap_count = len(self.active_traps[inter.channel.id])
+
+        await inter.response.send_message(
+            f"🔍 **Trap Check** (-{cost} {Config.POINT_NAME})\n"
+            f"Active traps in this channel: **{trap_count}**",
+            ephemeral=True,
+        )
+
+    @commands.slash_command(
+        description="Buy a lottery ticket with a 2-digit number (00-99)"
+    )
+    async def buylottery(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        number: int = commands.Param(
+            description="Pick a 2-digit number (0-99)",
+            ge=0,
+            le=99,
+        ),
+    ):
+        """Buy a lottery ticket for 100 points"""
+        cost = 100
+
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < cost:
+                await inter.response.send_message(
+                    f"You need at least {cost} {Config.POINT_NAME} to buy a lottery ticket.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct cost
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                cost,
+                inter.author.id,
+            )
+
+            # Add to lottery pool
+            await self.add_to_lottery_pool(conn, cost)
+
+        # Add user to lottery entries
+        if number not in self.lottery_entries:
+            self.lottery_entries[number] = []
+        self.lottery_entries[number].append(inter.author.id)
+
+        await inter.response.send_message(
+            f"🎫 **Lottery Ticket Purchased!** (-{cost} {Config.POINT_NAME})\n"
+            f"Your number: **{number:02d}**\n"
+            f"Good luck!",
+        )
+        # Delete after 5 seconds
+        await asyncio.sleep(5)
+        await inter.delete_original_response()
+
+    @commands.slash_command(description="[MOD] Draw the lottery and pick a winner")
+    async def drawlottery(self, inter: disnake.ApplicationCommandInteraction):
+        """Draw lottery and distribute prizes (mod only)"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "❌ This command is only available to moderators.", ephemeral=True
+            )
+            return
+
+        # Check if there are any lottery entries
+        if not self.lottery_entries:
+            await inter.response.send_message(
+                "❌ No lottery tickets have been purchased yet!",
+                ephemeral=True,
+            )
+            return
+
+        # Get current lottery pool
+        async with db.pool.acquire() as conn:
+            prize_pool = await self.get_lottery_pool(conn)
+
+        # Draw winning number
+        winning_number = random.randint(0, 99)
+
+        # Check if there are winners
+        winners = self.lottery_entries.get(winning_number, [])
+
+        # Send notification to channel 956301076271857764
+        notification_channel = self.bot.get_channel(956301076271857764)
+
+        if not winners:
+            # No winners - keep prize pool for next draw
+            embed = disnake.Embed(
+                title="🎰 Lottery Draw - No Winners!",
+                description=f"**Winning Number:** {winning_number:02d}\n"
+                f"**Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n\n"
+                f"No one picked the winning number!\n"
+                f"The prize pool carries over to the next draw!",
+                color=disnake.Color.orange(),
+            )
+            if notification_channel:
+                await notification_channel.send(embed=embed)
+
+            await inter.response.send_message(
+                f"🎰 **Lottery drawn!** Winning number: **{winning_number:02d}**\n"
+                f"No winners this time. Prize pool ({prize_pool:,} {Config.POINT_NAME}) carries over!",
+            )
+            # Delete after 5 seconds
+            await asyncio.sleep(5)
+            await inter.delete_original_response()
+        else:
+            # Calculate prize per winner with 10% tax
+            total_tax = int(prize_pool * 0.10)
+            prize_after_tax = prize_pool - total_tax
+            prize_per_winner = prize_after_tax // len(winners)
+
+            # Distribute prizes
+            async with db.pool.acquire() as conn:
+                for winner_id in winners:
+                    await conn.execute(
+                        """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
+                        winner_id,
+                        prize_per_winner,
+                    )
+
+                # Add tax to tax pool
+                await self.add_to_tax_pool(conn, total_tax)
+
+                # Reset lottery pool to 5000 for next round
+                await self.set_lottery_pool(conn, 5000)
+
+            # Build winner list
+            winner_mentions = [f"<@{winner_id}>" for winner_id in winners]
+            winner_text = ", ".join(winner_mentions)
+
+            embed = disnake.Embed(
+                title="🎰 Lottery Draw - We Have Winners!",
+                description=f"**Winning Number:** {winning_number:02d}\n"
+                f"**Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
+                f"**Tax (10%):** {total_tax:,} {Config.POINT_NAME}\n"
+                f"**Winners:** {len(winners)}\n"
+                f"**Prize per Winner:** {prize_per_winner:,} {Config.POINT_NAME}\n\n"
+                f"🎉 **Winners:** {winner_text}",
+                color=disnake.Color.gold(),
+            )
+            if notification_channel:
+                await notification_channel.send(embed=embed)
+
+            await inter.response.send_message(
+                f"🎰 **Lottery drawn!** Winning number: **{winning_number:02d}**\n"
+                f"🎉 {len(winners)} winner(s)! Each won {prize_per_winner:,} {Config.POINT_NAME} (after 10% tax)!",
+            )
+            # Delete after 5 seconds
+            await asyncio.sleep(5)
+            await inter.delete_original_response()
+
+        # Clear lottery entries for next round
+        self.lottery_entries = {}
+
+    @commands.slash_command(description="Check the current lottery prize pool")
+    async def checklottery(self, inter: disnake.ApplicationCommandInteraction):
+        """Check the current lottery prize pool and entries"""
+        async with db.pool.acquire() as conn:
+            prize_pool = await self.get_lottery_pool(conn)
+
+        # Count total tickets sold
+        total_tickets = sum(len(users) for users in self.lottery_entries.values())
+
+        embed = disnake.Embed(
+            title="🎫 Lottery Status",
+            description=f"**Current Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
+            f"**Tickets Sold:** {total_tickets}\n"
+            f"**Cost per Ticket:** 100 {Config.POINT_NAME}\n"
+            f"**Tax on Winnings:** 10%",
+            color=disnake.Color.purple(),
+        )
+        await inter.response.send_message(embed=embed)
+        # Delete after 5 seconds
+        await asyncio.sleep(5)
+        await inter.delete_original_response()
+
+    @commands.slash_command(description="[MOD] Add points to the lottery prize pool")
+    async def addprize(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        amount: int = commands.Param(
+            description="Amount to add to the prize pool",
+            ge=1,
+        ),
+    ):
+        """Add points to the lottery prize pool (mod only)"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "❌ This command is only available to moderators.", ephemeral=True
+            )
+            return
+
+        async with db.pool.acquire() as conn:
+            await self.add_to_lottery_pool(conn, amount)
+            new_pool = await self.get_lottery_pool(conn)
+
+        await inter.response.send_message(
+            f"✅ Added **{amount:,} {Config.POINT_NAME}** to the lottery prize pool!\n"
+            f"**New Prize Pool:** {new_pool:,} {Config.POINT_NAME}",
+        )
+        # Delete after 5 seconds
+        await asyncio.sleep(5)
+        await inter.delete_original_response()
 
     @commands.slash_command(description="Show current tax pool")
     async def showtax(self, inter: disnake.ApplicationCommandInteraction):
@@ -986,20 +1403,26 @@ class Points(commands.Cog):
                 if attacker_cumulative + amount > 100000:
                     amount = 100000 - attacker_cumulative
 
-                # Calculate 5% tax
-                tax_amount = int(amount * 0.05)
-                attacker_gain = amount - tax_amount
+                # Calculate bonus if target has >10k points
+                actual_steal_amount = amount
+                if target_points > 10000:
+                    bonus = int(amount * 0.10)
+                    actual_steal_amount = amount + bonus
+
+                # Calculate 5% tax on the steal amount
+                tax_amount = int(actual_steal_amount * 0.05)
+                attacker_gain = actual_steal_amount - tax_amount
 
                 # Attacker steals points from target (minus tax)
                 await conn.execute(
                     "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_attack = profit_attack + $1 WHERE user_id = $3",
                     attacker_gain,
-                    amount,
+                    actual_steal_amount,
                     inter.author.id,
                 )
                 await conn.execute(
                     "UPDATE users SET points = points - $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
-                    amount,
+                    actual_steal_amount,
                     target.id,
                 )
 
@@ -1040,8 +1463,11 @@ class Points(commands.Cog):
                     description = f"{inter.author.mention} stole **{attacker_gain} {Config.POINT_NAME}** from {target.mention}!"
                     if tax_amount > 0:
                         description += f" ({tax_amount} tax collected)"
-                    if target_points > 3000:
+                    if target_points > 10000:
+                        description += f"\n💰 Super rich target (+10% bonus)!"
+                    elif target_points > 3000:
                         description += f"\n💎 Rich target bonus applied!"
+                    description += f"\n🎲 Win chance: {int(win_chance * 100)}%"
 
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
@@ -1055,6 +1481,7 @@ class Points(commands.Cog):
                     msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME} from {target.mention}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
+                    msg += f" | Win chance: {int(win_chance * 100)}%"
                     await inter.response.send_message(msg)
                     # Delete after 5 seconds
                     await asyncio.sleep(5)
@@ -1063,6 +1490,7 @@ class Points(commands.Cog):
                     msg = f"💥 **Attack successful!** You gained {attacker_gain} {Config.POINT_NAME} from {target.mention}"
                     if tax_amount > 0:
                         msg += f" ({tax_amount} tax)"
+                    msg += f" | Win chance: {int(win_chance * 100)}%"
                     await inter.response.send_message(msg)
             else:
                 # If target has dodge, attacker loses 2x points
@@ -1165,6 +1593,7 @@ class Points(commands.Cog):
                         description = f"{inter.author.mention} failed to attack {target.mention} and lost **{amount} {Config.POINT_NAME}**!"
                         if tax_amount > 0:
                             description += f" ({tax_amount} tax collected)"
+                        description += f"\n🎲 Win chance: {int(win_chance * 100)}%"
                         embed = disnake.Embed(
                             title="💔 Attack Failed!",
                             description=description,
@@ -1183,6 +1612,7 @@ class Points(commands.Cog):
                         msg = f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}"
                         if tax_amount > 0:
                             msg += f" ({tax_amount} tax)"
+                        msg += f" | Win chance: {int(win_chance * 100)}%"
                         await inter.response.send_message(msg)
                     # Delete after 5 seconds
                     await asyncio.sleep(5)
@@ -1197,6 +1627,7 @@ class Points(commands.Cog):
                         msg = f"💔 **Attack failed!** You lost {amount} {Config.POINT_NAME} to {target.mention}"
                         if tax_amount > 0:
                             msg += f" ({tax_amount} tax)"
+                        msg += f" | Win chance: {int(win_chance * 100)}%"
                         await inter.response.send_message(msg)
 
     @commands.slash_command(description="Attack a user multiple times in a row")
@@ -1468,18 +1899,25 @@ class Points(commands.Cog):
                     return None
 
                 actual_amount = min(amount, 100000 - attacker_cumulative)
-                tax_amount = int(actual_amount * 0.05)
-                attacker_gain = actual_amount - tax_amount
+
+                # Calculate bonus if target has >10k points
+                actual_steal_amount = actual_amount
+                if target_points > 10000:
+                    bonus = int(actual_amount * 0.10)
+                    actual_steal_amount = actual_amount + bonus
+
+                tax_amount = int(actual_steal_amount * 0.05)
+                attacker_gain = actual_steal_amount - tax_amount
 
                 await conn.execute(
                     "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_attack = profit_attack + $1 WHERE user_id = $3",
                     attacker_gain,
-                    actual_amount,
+                    actual_steal_amount,
                     attacker.id,
                 )
                 await conn.execute(
                     "UPDATE users SET points = points - $1, cumulative_defense_losses = cumulative_defense_losses + $1 WHERE user_id = $2",
-                    actual_amount,
+                    actual_steal_amount,
                     target.id,
                 )
                 await self.add_to_tax_pool(conn, tax_amount)
@@ -1513,6 +1951,8 @@ class Points(commands.Cog):
                     description = f"{attacker.mention} stole **{attacker_gain} {Config.POINT_NAME}** from {target.mention}!"
                     if tax_amount > 0:
                         description += f" ({tax_amount} tax)"
+                    if target_points > 10000:
+                        description += f"\n💰 Super rich target (+10% bonus)!"
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
                         description=description,
@@ -1991,7 +2431,7 @@ class Points(commands.Cog):
         self,
         inter: disnake.ApplicationCommandInteraction,
     ):
-        """Activate dodge to block the next attack (costs 50 points, lasts 30 minutes)"""
+        """Activate dodge to block the next attack (costs 50 points, lasts 5 minutes)"""
         now = datetime.datetime.now()
         user_id = inter.author.id
 
@@ -2008,32 +2448,38 @@ class Points(commands.Cog):
                 )
                 return
 
-        # Check cooldown (15 minutes)
-        if user_id in self.dodge_cooldowns:
-            time_passed = (now - self.dodge_cooldowns[user_id]).total_seconds()
-            if time_passed < 900:  # 15 minutes
-                remaining_mins = int((900 - time_passed) / 60)
-                remaining_secs = int((900 - time_passed) % 60)
-                await inter.response.send_message(
-                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using dodge again.",
-                    ephemeral=True,
-                )
-                return
-
-        # Check if already has active dodge
-        if user_id in self.active_dodges:
-            dodge_time = self.active_dodges[user_id]
-            if (now - dodge_time).total_seconds() < 300:  # 5 minutes
-                remaining_secs = int(300 - (now - dodge_time).total_seconds())
-                remaining_mins = remaining_secs // 60
-                remaining_secs = remaining_secs % 60
-                await inter.response.send_message(
-                    f"🛡️ You already have an active dodge! ({remaining_mins}m {remaining_secs}s remaining)",
-                    ephemeral=True,
-                )
-                return
-
+        # Check cooldown from database (15 minutes) - persists across bot restarts
         async with db.pool.acquire() as conn:
+            dodge_cooldown_at = await conn.fetchval(
+                "SELECT dodge_cooldown_at FROM users WHERE user_id = $1", user_id
+            )
+
+            if dodge_cooldown_at:
+                time_passed = (
+                    now - dodge_cooldown_at.replace(tzinfo=None)
+                ).total_seconds()
+                if time_passed < 900:  # 15 minutes
+                    remaining_mins = int((900 - time_passed) / 60)
+                    remaining_secs = int((900 - time_passed) % 60)
+                    await inter.response.send_message(
+                        f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using dodge again.",
+                        ephemeral=True,
+                    )
+                    return
+
+            # Check if already has active dodge
+            if user_id in self.active_dodges:
+                dodge_time = self.active_dodges[user_id]
+                if (now - dodge_time).total_seconds() < 300:  # 5 minutes
+                    remaining_secs = int(300 - (now - dodge_time).total_seconds())
+                    remaining_mins = remaining_secs // 60
+                    remaining_secs = remaining_secs % 60
+                    await inter.response.send_message(
+                        f"🛡️ You already have an active dodge! ({remaining_mins}m {remaining_secs}s remaining)",
+                        ephemeral=True,
+                    )
+                    return
+
             user_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", inter.author.id
             )
@@ -2046,15 +2492,15 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Deduct 50 points
+            # Deduct 50 points and set cooldown in database
             await conn.execute(
-                "UPDATE users SET points = points - 50 WHERE user_id = $1",
+                "UPDATE users SET points = points - 50, dodge_cooldown_at = $1 WHERE user_id = $2",
+                now,
                 inter.author.id,
             )
 
         # Activate dodge
         self.active_dodges[user_id] = now
-        self.dodge_cooldowns[user_id] = now
 
         await inter.response.send_message(
             f"🛡️ **Dodge activated!** (-50 {Config.POINT_NAME}) The next attack against you within 5 minutes will automatically fail!",
@@ -3242,6 +3688,93 @@ class Points(commands.Cog):
 
         await inter.response.send_message(
             f"Role **{selected_role.name}** added to {target.display_name} for {Config.ROLE_DURATION_MINUTES} minute(s)!",
+            ephemeral=True,
+        )
+
+    @commands.slash_command(description="Remove a purchased role (costs 1500 points)")
+    async def removerole(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        role: str = commands.Param(autocomplete=autocomplete_roles),
+        target: disnake.Member = None,
+    ):
+        """Remove a role you purchased from /buyrole (costs 1500 points)"""
+        REMOVE_COST = 1500
+        target = target or inter.author
+
+        # Get role prices from database (to check if it's a purchasable role)
+        role_prices = await self.get_shop_roles()
+
+        # Find the role by name from purchasable roles
+        selected_role = None
+        for role_id in role_prices.keys():
+            r = inter.guild.get_role(role_id)
+            if r and r.name.lower() == role.lower():
+                selected_role = r
+                break
+
+        if not selected_role:
+            await inter.response.send_message(
+                "This role is not available. Use `/shop` to see available roles.",
+                ephemeral=True,
+            )
+            return
+
+        # Check if target has the role
+        if selected_role not in target.roles:
+            await inter.response.send_message(
+                f"{target.display_name} doesn't have the **{selected_role.name}** role.",
+                ephemeral=True,
+            )
+            return
+
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            points = points or 0
+
+            if points < REMOVE_COST:
+                await inter.response.send_message(
+                    f"Not enough {Config.POINT_NAME}. You have {points}, need {REMOVE_COST}.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct points
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                REMOVE_COST,
+                inter.author.id,
+            )
+
+            # Remove from temp_roles table
+            await conn.execute(
+                "DELETE FROM temp_roles WHERE user_id = $1 AND role_id = $2",
+                target.id,
+                selected_role.id,
+            )
+
+        # Remove role
+        await target.remove_roles(selected_role)
+
+        channel = self.bot.get_channel(956301076271857764)
+        if channel:
+            if target == inter.author:
+                desc = f"{inter.author.mention} removed the **{selected_role.name}** role for **{REMOVE_COST} {Config.POINT_NAME}**"
+            else:
+                desc = f"{inter.author.mention} removed the **{selected_role.name}** role from {target.mention} for **{REMOVE_COST} {Config.POINT_NAME}**"
+
+            embed = disnake.Embed(
+                title="🗑️ Role Removed",
+                description=desc,
+                color=disnake.Color.dark_gray(),
+            )
+            await channel.send(embed=embed)
+
+        await inter.response.send_message(
+            f"Role **{selected_role.name}** removed from {target.display_name} for {REMOVE_COST} {Config.POINT_NAME}!",
             ephemeral=True,
         )
 
