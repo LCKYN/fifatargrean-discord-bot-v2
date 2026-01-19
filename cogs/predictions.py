@@ -831,6 +831,11 @@ class Predictions(commands.Cog):
                 bettors_by_choice,
             ) = await get_prediction_data(conn, prediction_id)
 
+        # Get winning choice text
+        winning_text = next(
+            (text for num, text in choices if num == winner), f"Choice #{winner}"
+        )
+
         try:
             channel = self.bot.get_channel(pred["channel_id"])
             if channel:
@@ -852,16 +857,66 @@ class Predictions(commands.Cog):
                 view = PredictionView(prediction_id, choices, is_active=False)
                 await msg.edit(embed=embed, view=view)
 
-                # Archive thread if message is in a thread
+                # Send results with all participants tagged
+                winners_list = []
+                losers_list = []
+
+                for bet in all_bets:
+                    if bet["choice_number"] == winner:
+                        # Winner - find their payout
+                        payout = next(
+                            (p[1] for p in payouts if p[0] == bet["user_id"]), 0
+                        )
+                        profit = payout - bet["amount"]
+                        winners_list.append(f"<@{bet['user_id']}> (+{profit:,})")
+                    else:
+                        # Loser
+                        losers_list.append(f"<@{bet['user_id']}> (-{bet['amount']:,})")
+
+                # Build result message
+                result_msg = f"## 🎉 Prediction #{prediction_id} Results\n\n"
+                result_msg += f"**Winner:** Choice #{winner} - {winning_text}\n\n"
+
+                if winners_list:
+                    result_msg += f"**🏆 Winners ({len(winners_list)}):**\n"
+                    # Split into chunks if too long
+                    chunk_size = 10
+                    for i in range(0, len(winners_list), chunk_size):
+                        chunk = winners_list[i : i + chunk_size]
+                        result_msg += ", ".join(chunk) + "\n"
+                    result_msg += "\n"
+
+                if losers_list:
+                    result_msg += f"**💔 Lost ({len(losers_list)}):**\n"
+                    # Split into chunks if too long
+                    chunk_size = 10
+                    for i in range(0, len(losers_list), chunk_size):
+                        chunk = losers_list[i : i + chunk_size]
+                        result_msg += ", ".join(chunk) + "\n"
+
+                # Send in thread
                 if isinstance(channel, disnake.Thread):
+                    # Split message if too long (2000 char limit)
+                    if len(result_msg) > 2000:
+                        parts = []
+                        current = ""
+                        for line in result_msg.split("\n"):
+                            if len(current) + len(line) + 1 > 2000:
+                                parts.append(current)
+                                current = line + "\n"
+                            else:
+                                current += line + "\n"
+                        if current:
+                            parts.append(current)
+
+                        for part in parts:
+                            await channel.send(part)
+                    else:
+                        await channel.send(result_msg)
+
                     await channel.edit(archived=True, locked=True)
         except Exception as e:
             print(f"Error updating resolved prediction: {e}")
-
-        # Get winning choice text
-        winning_text = next(
-            (text for num, text in choices if num == winner), f"Choice #{winner}"
-        )
 
         # Send announcement to bot channel
         bot_channel = self.bot.get_channel(Config.BOT_CHANNEL_ID)
