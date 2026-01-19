@@ -77,12 +77,88 @@ class SpamTracker:
         return len(set(ch for _, _, ch in self.messages.get(user_id, [])))
 
 
+class DuplicateContentTracker:
+    """Track duplicate URLs/images posted across channels - 5 channels in 5 minutes = ban"""
+
+    def __init__(self, min_channels: int = 5, time_limit: int = 300):
+        self.min_channels = min_channels  # Must post same content in X different channels
+        self.time_limit = time_limit  # 5 minutes = 300 seconds
+        # {user_id: {content_hash: [(timestamp, channel_id), ...]}}
+        self.content_posts: Dict[int, Dict[str, List[tuple]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+
+    def _extract_urls(self, text: str) -> List[str]:
+        """Extract all URLs from text"""
+        return URL_PATTERN.findall(text) if text else []
+
+    def add_content(
+        self, user_id: int, content: str, channel_id: int, attachment_urls: List[str]
+    ) -> Optional[dict]:
+        """
+        Track content (URLs/images) and check for duplicate spam.
+        Returns spam data if same content posted in min_channels DIFFERENT channels.
+        """
+        now = time.time()
+
+        # Collect all URLs (from text and attachments)
+        all_urls = self._extract_urls(content) + attachment_urls
+
+        if not all_urls:
+            return None
+
+        # Clean old entries for this user
+        for content_hash in list(self.content_posts[user_id].keys()):
+            self.content_posts[user_id][content_hash] = [
+                (ts, ch)
+                for ts, ch in self.content_posts[user_id][content_hash]
+                if now - ts < self.time_limit
+            ]
+            # Remove empty entries
+            if not self.content_posts[user_id][content_hash]:
+                del self.content_posts[user_id][content_hash]
+
+        # Track each URL
+        for url in all_urls:
+            # Normalize URL (lowercase, strip trailing slashes)
+            normalized_url = url.lower().rstrip("/")
+
+            # Add this post
+            self.content_posts[user_id][normalized_url].append((now, channel_id))
+
+            # Count unique channels for this specific URL
+            unique_channels = set(
+                ch for _, ch in self.content_posts[user_id][normalized_url]
+            )
+
+            # Check if spam (same URL in X different channels)
+            if len(unique_channels) >= self.min_channels:
+                # Clear this user's tracking after detection
+                spam_url = normalized_url
+                self.content_posts[user_id] = defaultdict(list)
+                return {
+                    "duplicate_url": spam_url,
+                    "channel_count": len(unique_channels),
+                    "reason": "duplicate_content",
+                }
+
+        return None
+
+    def get_duplicate_channel_count(self, user_id: int) -> Dict[str, int]:
+        """Get count of unique channels per URL for a user"""
+        result = {}
+        for url, posts in self.content_posts.get(user_id, {}).items():
+            result[url] = len(set(ch for _, ch in posts))
+        return result
+
+
 class SpamDetector(commands.Cog):
     """Detects and bans spammers posting links across multiple channels"""
 
     def __init__(self, bot):
         self.bot = bot
         self.spam_tracker = SpamTracker(min_channels=4, time_limit=30)
+        self.duplicate_tracker = DuplicateContentTracker(min_channels=5, time_limit=300)
 
         # Channels to ignore (add your channel IDs here)
         self.ignore_channels = [
@@ -107,7 +183,37 @@ class SpamDetector(commands.Cog):
         if message.channel.id in self.ignore_channels:
             return
 
-        # Check for links
+        # Get attachment URLs (images, files)
+        attachment_urls = [att.url for att in message.attachments]
+
+        # Check for duplicate content spam (same URL/image in 5 channels within 5 mins)
+        duplicate_result = self.duplicate_tracker.add_content(
+            message.author.id,
+            message.content,
+            message.channel.id,
+            attachment_urls,
+        )
+
+        if duplicate_result:
+            log(
+                "spam_detector",
+                "duplicate_spam_detected",
+                {
+                    "user_id": message.author.id,
+                    "user_name": str(message.author),
+                    "channel_count": duplicate_result["channel_count"],
+                    "duplicate_url": duplicate_result["duplicate_url"][:100],
+                },
+            )
+            await self.handle_spam(
+                message,
+                f"Duplicate content posted in {duplicate_result['channel_count']} channels:\n{duplicate_result['duplicate_url'][:500]}",
+                delete_seconds=300,  # Delete 5 minutes of messages
+                reason_type="duplicate_content",
+            )
+            return
+
+        # Check for links (original spam detection)
         if not contains_link(message.content):
             return
 
@@ -141,13 +247,32 @@ class SpamDetector(commands.Cog):
                     "channel_count": spam_result["channel_count"],
                 },
             )
-            await self.handle_spam(message, spam_result["all_messages"])
+            await self.handle_spam(
+                message,
+                spam_result["all_messages"],
+                delete_seconds=1800,  # Delete 30 minutes of messages
+                reason_type="link_spam",
+            )
 
-    async def handle_spam(self, message: disnake.Message, all_messages: str):
+    async def handle_spam(
+        self,
+        message: disnake.Message,
+        all_messages: str,
+        delete_seconds: int = 1800,
+        reason_type: str = "link_spam",
+    ):
         """Handle detected spam - ban user and notify"""
         user = message.author
         channel = message.channel
         guild = message.guild
+
+        # Format reason for ban
+        if reason_type == "duplicate_content":
+            ban_reason = f"Auto-ban: Duplicate content spam (same URL/image in 5+ channels)"
+            title_text = "🔨 Auto-Ban: Duplicate Content Spam"
+        else:
+            ban_reason = f"Auto-ban: Link spam detected in #{channel.name}"
+            title_text = "🔨 Auto-Ban: Link Spam"
 
         # Don't ban mods/admins
         mod_role = guild.get_role(Config.MOD_ROLE_ID)
@@ -184,14 +309,14 @@ class SpamDetector(commands.Cog):
             # Ban the user
             await guild.ban(
                 user,
-                clean_history_duration=1800,  # Delete last 30 mins of messages (seconds)
-                reason=f"Auto-ban: Link spam detected in #{channel.name}",
+                clean_history_duration=delete_seconds,  # Delete messages (seconds)
+                reason=ban_reason,
             )
 
             # Send public notification
             public_embed = disnake.Embed(
                 title="🔨 User Banned",
-                description=f"{user.mention} was banned for link spam",
+                description=f"{user.mention} was banned for {'duplicate content' if reason_type == 'duplicate_content' else 'link'} spam",
                 color=disnake.Color.red(),
             )
             public_embed.set_image(
@@ -201,7 +326,7 @@ class SpamDetector(commands.Cog):
 
             # Send mod notification
             mod_embed = disnake.Embed(
-                title="🔨 Auto-Ban: Link Spam", color=disnake.Color.red()
+                title=title_text, color=disnake.Color.red()
             )
             mod_embed.add_field(name="User", value=f"{user} ({user.id})", inline=False)
             mod_embed.add_field(name="Channel", value=channel.mention, inline=True)
@@ -413,7 +538,8 @@ class SpamDetector(commands.Cog):
             )
             dm_embed.add_field(
                 name="Settings",
-                value=f"• Trigger: **4 link messages** in **30 seconds**\n"
+                value=f"• Link spam: **4 link messages** in **30 seconds**\n"
+                f"• Duplicate spam: **Same URL/image** in **5 channels** within **5 minutes**\n"
                 f"• Ignored channels: **{len(self.ignore_channels)}**\n"
                 f"• Mod channel set: **{'Yes' if self.mod_channel_id else 'No'}**",
                 inline=False,
