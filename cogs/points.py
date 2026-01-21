@@ -25,13 +25,13 @@ class Points(commands.Cog):
         self.dodge_cooldowns = {}  # Track last dodge time per user
         self.active_dodges = {}  # {user_id: activated_at}
         self.attack_last_use = {}  # Track last attack time to block dodge for 5 minutes
-        self.ceasefire_cooldowns = {}  # Track last ceasefire time per user
-        self.ceasefire_cooldown_durations = {}  # Track cooldown duration for each user's last ceasefire
-        self.active_ceasefires = {}  # {user_id: activated_at}
-        self.active_ceasefire_durations = {}  # {user_id: duration_in_seconds}
-        self.ceasefire_breakers = {}  # {user_id: debuffed_at} - 10 min debuff for breaking ceasefire
+        self.counter_cooldowns = {}  # Track last counter time per user
+        self.active_counters = {}  # {defender_id: {attacker_id: activated_at}}
+        self.shield_cooldowns = {}  # Track last shield time per user
+        self.active_shields = {}  # {user_id: activated_at}
         self.active_airdrops = {}  # {message_id: {"claimed_users": set(), "count": 0}}
         self.lottery_entries = {}  # {number: [user_ids]} - current lottery entries
+        self.lottery_user_count = {}  # {user_id: count} - track how many tickets each user bought (max 10)
 
     def cog_unload(self):
         self.daily_tax_task.cancel()
@@ -652,19 +652,67 @@ class Points(commands.Cog):
         )
 
     @commands.slash_command(
-        description="Buy a lottery ticket with a 2-digit number (00-99)"
+        description="Buy lottery tickets with 2-digit numbers (00-99), space separated for multiple"
     )
     async def buylottery(
         self,
         inter: disnake.ApplicationCommandInteraction,
-        number: int = commands.Param(
-            description="Pick a 2-digit number (0-99)",
-            ge=0,
-            le=99,
+        numbers: str = commands.Param(
+            description="Pick 2-digit number(s) 0-99, space separated (e.g. '10 12 15')",
         ),
     ):
-        """Buy a lottery ticket for 100 points"""
-        cost = 100
+        """Buy lottery tickets for 100 points each (max 10 per user)"""
+        cost_per_ticket = 100
+        max_tickets_per_user = 10
+        lottery_channel_id = 956301076271857764
+
+        # Parse numbers from input string
+        try:
+            number_list = [int(n.strip()) for n in numbers.split() if n.strip()]
+        except ValueError:
+            await inter.response.send_message(
+                "❌ Invalid input. Please enter numbers only (e.g. '10 12 15').",
+                ephemeral=True,
+            )
+            return
+
+        # Validate all numbers are in range 0-99
+        invalid_numbers = [n for n in number_list if n < 0 or n > 99]
+        if invalid_numbers:
+            await inter.response.send_message(
+                f"❌ Invalid numbers: {invalid_numbers}. Numbers must be between 0-99.",
+                ephemeral=True,
+            )
+            return
+
+        if not number_list:
+            await inter.response.send_message(
+                "❌ Please enter at least one number.",
+                ephemeral=True,
+            )
+            return
+
+        # Check current user ticket count
+        current_count = self.lottery_user_count.get(inter.author.id, 0)
+        remaining_slots = max_tickets_per_user - current_count
+
+        if remaining_slots <= 0:
+            await inter.response.send_message(
+                f"❌ You have already purchased the maximum of {max_tickets_per_user} lottery tickets.",
+                ephemeral=True,
+            )
+            return
+
+        # Limit to remaining slots
+        if len(number_list) > remaining_slots:
+            await inter.response.send_message(
+                f"❌ You can only buy {remaining_slots} more ticket(s). "
+                f"You already have {current_count}/{max_tickets_per_user} tickets.",
+                ephemeral=True,
+            )
+            return
+
+        total_cost = cost_per_ticket * len(number_list)
 
         # Check if user has enough points
         async with db.pool.acquire() as conn:
@@ -673,9 +721,9 @@ class Points(commands.Cog):
             )
             user_points = user_points or 0
 
-            if user_points < cost:
+            if user_points < total_cost:
                 await inter.response.send_message(
-                    f"You need at least {cost} {Config.POINT_NAME} to buy a lottery ticket.",
+                    f"You need at least {total_cost} {Config.POINT_NAME} to buy {len(number_list)} lottery ticket(s).",
                     ephemeral=True,
                 )
                 return
@@ -683,28 +731,159 @@ class Points(commands.Cog):
             # Deduct cost
             await conn.execute(
                 "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                cost,
+                total_cost,
                 inter.author.id,
             )
 
             # Add to lottery pool
-            await self.add_to_lottery_pool(conn, cost)
+            await self.add_to_lottery_pool(conn, total_cost)
 
-        # Add user to lottery entries
-        if number not in self.lottery_entries:
-            self.lottery_entries[number] = []
-        self.lottery_entries[number].append(inter.author.id)
+        # Add user to lottery entries for each number
+        for number in number_list:
+            if number not in self.lottery_entries:
+                self.lottery_entries[number] = []
+            self.lottery_entries[number].append(inter.author.id)
+
+        # Update user ticket count
+        self.lottery_user_count[inter.author.id] = current_count + len(number_list)
+        new_count = self.lottery_user_count[inter.author.id]
+
+        # Format numbers for display
+        numbers_display = ", ".join([f"{n:02d}" for n in number_list])
+
+        # Send to lottery channel
+        lottery_channel = self.bot.get_channel(lottery_channel_id)
+        if lottery_channel:
+            await lottery_channel.send(
+                f"🎫 **Lottery Ticket Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+                f"**Buyer:** {inter.author.mention}\n"
+                f"**Numbers:** {numbers_display}\n"
+                f"**Tickets:** {len(number_list)} | **Total owned:** {new_count}/{max_tickets_per_user}\n"
+                f"Good luck!"
+            )
+
+        # If used in lottery channel, don't delete; otherwise delete after 5 seconds
+        is_lottery_channel = inter.channel.id == lottery_channel_id
 
         await inter.response.send_message(
-            f"🎫 **Lottery Ticket Purchased!** (-{cost} {Config.POINT_NAME})\n"
-            f"Your number: **{number:02d}**\n"
+            f"🎫 **Lottery Ticket Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+            f"Your numbers: **{numbers_display}**\n"
+            f"Tickets owned: {new_count}/{max_tickets_per_user}\n"
             f"Good luck!",
+            ephemeral=not is_lottery_channel,
         )
-        # Delete after 5 seconds
-        await asyncio.sleep(5)
-        await inter.delete_original_response()
 
-    @commands.slash_command(description="[MOD] Draw the lottery and pick a winner")
+        if not is_lottery_channel:
+            await asyncio.sleep(5)
+            await inter.delete_original_response()
+
+    @commands.slash_command(
+        description="Buy random lottery tickets (1-10 random numbers)"
+    )
+    async def buyrandomlottery(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        amount: int = commands.Param(
+            description="Number of random tickets to buy (1-10)",
+            ge=1,
+            le=10,
+        ),
+    ):
+        """Buy random lottery tickets for 100 points each (max 10 per user)"""
+        cost_per_ticket = 100
+        max_tickets_per_user = 10
+        lottery_channel_id = 956301076271857764
+
+        # Check current user ticket count
+        current_count = self.lottery_user_count.get(inter.author.id, 0)
+        remaining_slots = max_tickets_per_user - current_count
+
+        if remaining_slots <= 0:
+            await inter.response.send_message(
+                f"❌ You have already purchased the maximum of {max_tickets_per_user} lottery tickets.",
+                ephemeral=True,
+            )
+            return
+
+        # Limit to remaining slots
+        actual_amount = min(amount, remaining_slots)
+        if actual_amount < amount:
+            await inter.response.send_message(
+                f"❌ You can only buy {remaining_slots} more ticket(s). "
+                f"You already have {current_count}/{max_tickets_per_user} tickets.",
+                ephemeral=True,
+            )
+            return
+
+        total_cost = cost_per_ticket * actual_amount
+
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
+            )
+            user_points = user_points or 0
+
+            if user_points < total_cost:
+                await inter.response.send_message(
+                    f"You need at least {total_cost} {Config.POINT_NAME} to buy {actual_amount} lottery ticket(s).",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct cost
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                total_cost,
+                inter.author.id,
+            )
+
+            # Add to lottery pool
+            await self.add_to_lottery_pool(conn, total_cost)
+
+        # Generate random unique numbers
+        number_list = random.sample(range(0, 100), actual_amount)
+
+        # Add user to lottery entries for each number
+        for number in number_list:
+            if number not in self.lottery_entries:
+                self.lottery_entries[number] = []
+            self.lottery_entries[number].append(inter.author.id)
+
+        # Update user ticket count
+        self.lottery_user_count[inter.author.id] = current_count + actual_amount
+        new_count = self.lottery_user_count[inter.author.id]
+
+        # Format numbers for display
+        numbers_display = ", ".join([f"{n:02d}" for n in sorted(number_list)])
+
+        # Send to lottery channel
+        lottery_channel = self.bot.get_channel(lottery_channel_id)
+        if lottery_channel:
+            await lottery_channel.send(
+                f"🎲 **Random Lottery Tickets Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+                f"**Buyer:** {inter.author.mention}\n"
+                f"**Numbers:** {numbers_display}\n"
+                f"**Tickets:** {actual_amount} | **Total owned:** {new_count}/{max_tickets_per_user}\n"
+                f"Good luck!"
+            )
+
+        # If used in lottery channel, don't delete; otherwise delete after 5 seconds
+        is_lottery_channel = inter.channel.id == lottery_channel_id
+
+        await inter.response.send_message(
+            f"🎲 **Random Lottery Tickets Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+            f"Your numbers: **{numbers_display}**\n"
+            f"Tickets owned: {new_count}/{max_tickets_per_user}\n"
+            f"Good luck!",
+            ephemeral=not is_lottery_channel,
+        )
+
+        if not is_lottery_channel:
+            await asyncio.sleep(5)
+            await inter.delete_original_response()
+
+    @commands.slash_command(description="[MOD] Draw the lottery and pick 2 winners")
     async def drawlottery(self, inter: disnake.ApplicationCommandInteraction):
         """Draw lottery and distribute prizes (mod only)"""
         # Check if user has mod role
@@ -727,22 +906,123 @@ class Points(commands.Cog):
         async with db.pool.acquire() as conn:
             prize_pool = await self.get_lottery_pool(conn)
 
-        # Draw winning number
-        winning_number = random.randint(0, 99)
+        # Draw 2 winning numbers
+        winning_numbers = random.sample(range(0, 100), 2)
+        winning_number_1 = winning_numbers[0]
+        winning_number_2 = winning_numbers[1]
 
-        # Check if there are winners
-        winners = self.lottery_entries.get(winning_number, [])
+        # Split prize pool into 2 prizes (50% each)
+        prize_per_number = prize_pool // 2
+
+        # Check if there are winners for each number
+        winners_1 = self.lottery_entries.get(winning_number_1, [])
+        winners_2 = self.lottery_entries.get(winning_number_2, [])
 
         # Send notification to channel 956301076271857764
         notification_channel = self.bot.get_channel(956301076271857764)
 
-        if not winners:
-            # No winners - keep prize pool for next draw
+        total_tax_collected = 0
+        prize_distributed = False
+        results = []
+
+        # Process Prize 1
+        if winners_1:
+            tax_1 = int(prize_per_number * 0.10)
+            prize_after_tax_1 = prize_per_number - tax_1
+            prize_per_winner_1 = prize_after_tax_1 // len(winners_1)
+            total_tax_collected += tax_1
+            prize_distributed = True
+
+            async with db.pool.acquire() as conn:
+                for winner_id in winners_1:
+                    await conn.execute(
+                        """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
+                        winner_id,
+                        prize_per_winner_1,
+                    )
+
+            winner_mentions_1 = [f"<@{winner_id}>" for winner_id in winners_1]
+            results.append(
+                {
+                    "number": winning_number_1,
+                    "prize_pool": prize_per_number,
+                    "tax": tax_1,
+                    "winners": winners_1,
+                    "prize_per_winner": prize_per_winner_1,
+                    "winner_text": ", ".join(winner_mentions_1),
+                }
+            )
+        else:
+            results.append(
+                {
+                    "number": winning_number_1,
+                    "prize_pool": prize_per_number,
+                    "winners": [],
+                }
+            )
+
+        # Process Prize 2
+        if winners_2:
+            tax_2 = int(prize_per_number * 0.10)
+            prize_after_tax_2 = prize_per_number - tax_2
+            prize_per_winner_2 = prize_after_tax_2 // len(winners_2)
+            total_tax_collected += tax_2
+            prize_distributed = True
+
+            async with db.pool.acquire() as conn:
+                for winner_id in winners_2:
+                    await conn.execute(
+                        """INSERT INTO users (user_id, points) VALUES ($1, $2)
+                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
+                        winner_id,
+                        prize_per_winner_2,
+                    )
+
+            winner_mentions_2 = [f"<@{winner_id}>" for winner_id in winners_2]
+            results.append(
+                {
+                    "number": winning_number_2,
+                    "prize_pool": prize_per_number,
+                    "tax": tax_2,
+                    "winners": winners_2,
+                    "prize_per_winner": prize_per_winner_2,
+                    "winner_text": ", ".join(winner_mentions_2),
+                }
+            )
+        else:
+            results.append(
+                {
+                    "number": winning_number_2,
+                    "prize_pool": prize_per_number,
+                    "winners": [],
+                }
+            )
+
+        # Handle tax and pool reset
+        async with db.pool.acquire() as conn:
+            if total_tax_collected > 0:
+                await self.add_to_tax_pool(conn, total_tax_collected)
+
+            # Calculate remaining pool (from numbers with no winners)
+            remaining_pool = 0
+            if not winners_1:
+                remaining_pool += prize_per_number
+            if not winners_2:
+                remaining_pool += prize_per_number
+
+            if prize_distributed:
+                # Reset to 5000 + any unclaimed prizes
+                await self.set_lottery_pool(conn, 5000 + remaining_pool)
+            # If no winners at all, pool stays as is (already handled by not distributing)
+
+        # Build embed
+        if not winners_1 and not winners_2:
             embed = disnake.Embed(
                 title="🎰 Lottery Draw - No Winners!",
-                description=f"**Winning Number:** {winning_number:02d}\n"
-                f"**Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n\n"
-                f"No one picked the winning number!\n"
+                description=f"**Winning Numbers:** {winning_number_1:02d} & {winning_number_2:02d}\n"
+                f"**Total Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n\n"
+                f"No one picked either winning number!\n"
                 f"The prize pool carries over to the next draw!",
                 color=disnake.Color.orange(),
             )
@@ -750,83 +1030,84 @@ class Points(commands.Cog):
                 await notification_channel.send(embed=embed)
 
             await inter.response.send_message(
-                f"🎰 **Lottery drawn!** Winning number: **{winning_number:02d}**\n"
+                f"🎰 **Lottery drawn!** Winning numbers: **{winning_number_1:02d}** & **{winning_number_2:02d}**\n"
                 f"No winners this time. Prize pool ({prize_pool:,} {Config.POINT_NAME}) carries over!",
+                ephemeral=True,
             )
-            # Delete after 5 seconds
-            await asyncio.sleep(5)
-            await inter.delete_original_response()
         else:
-            # Calculate prize per winner with 10% tax
-            total_tax = int(prize_pool * 0.10)
-            prize_after_tax = prize_pool - total_tax
-            prize_per_winner = prize_after_tax // len(winners)
+            # Build description for embed
+            description = f"**Total Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
+            description += (
+                f"**Prize per Number:** {prize_per_number:,} {Config.POINT_NAME}\n\n"
+            )
 
-            # Distribute prizes
-            async with db.pool.acquire() as conn:
-                for winner_id in winners:
-                    await conn.execute(
-                        """INSERT INTO users (user_id, points) VALUES ($1, $2)
-                           ON CONFLICT (user_id) DO UPDATE SET points = users.points + $2""",
-                        winner_id,
-                        prize_per_winner,
-                    )
+            for i, result in enumerate(results, 1):
+                description += f"**🎯 Prize {i} - Number {result['number']:02d}**\n"
+                if result["winners"]:
+                    description += f"Winners: {len(result['winners'])}\n"
+                    description += f"Prize per Winner: {result['prize_per_winner']:,} {Config.POINT_NAME}\n"
+                    description += f"🎉 {result['winner_text']}\n\n"
+                else:
+                    description += f"No winners - carries over!\n\n"
 
-                # Add tax to tax pool
-                await self.add_to_tax_pool(conn, total_tax)
-
-                # Reset lottery pool to 5000 for next round
-                await self.set_lottery_pool(conn, 5000)
-
-            # Build winner list
-            winner_mentions = [f"<@{winner_id}>" for winner_id in winners]
-            winner_text = ", ".join(winner_mentions)
+            description += (
+                f"**Total Tax Collected:** {total_tax_collected:,} {Config.POINT_NAME}"
+            )
 
             embed = disnake.Embed(
-                title="🎰 Lottery Draw - We Have Winners!",
-                description=f"**Winning Number:** {winning_number:02d}\n"
-                f"**Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
-                f"**Tax (10%):** {total_tax:,} {Config.POINT_NAME}\n"
-                f"**Winners:** {len(winners)}\n"
-                f"**Prize per Winner:** {prize_per_winner:,} {Config.POINT_NAME}\n\n"
-                f"🎉 **Winners:** {winner_text}",
+                title="🎰 Lottery Draw Results!",
+                description=description,
                 color=disnake.Color.gold(),
             )
             if notification_channel:
                 await notification_channel.send(embed=embed)
 
+            total_winners = len(winners_1) + len(winners_2)
             await inter.response.send_message(
-                f"🎰 **Lottery drawn!** Winning number: **{winning_number:02d}**\n"
-                f"🎉 {len(winners)} winner(s)! Each won {prize_per_winner:,} {Config.POINT_NAME} (after 10% tax)!",
+                f"🎰 **Lottery drawn!** Winning numbers: **{winning_number_1:02d}** & **{winning_number_2:02d}**\n"
+                f"🎉 {total_winners} total winner(s)!",
+                ephemeral=True,
             )
-            # Delete after 5 seconds
-            await asyncio.sleep(5)
-            await inter.delete_original_response()
 
-        # Clear lottery entries for next round
+        # Clear lottery entries and user counts for next round
         self.lottery_entries = {}
+        self.lottery_user_count = {}
 
     @commands.slash_command(description="Check the current lottery prize pool")
     async def checklottery(self, inter: disnake.ApplicationCommandInteraction):
         """Check the current lottery prize pool and entries"""
+        lottery_channel_id = 956301076271857764
+
         async with db.pool.acquire() as conn:
             prize_pool = await self.get_lottery_pool(conn)
 
         # Count total tickets sold
         total_tickets = sum(len(users) for users in self.lottery_entries.values())
 
+        # Count unique participants
+        unique_participants = len(self.lottery_user_count)
+
+        # Get user's current ticket count
+        user_tickets = self.lottery_user_count.get(inter.author.id, 0)
+
         embed = disnake.Embed(
             title="🎫 Lottery Status",
             description=f"**Current Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
             f"**Tickets Sold:** {total_tickets}\n"
+            f"**Participants:** {unique_participants}\n"
             f"**Cost per Ticket:** 100 {Config.POINT_NAME}\n"
-            f"**Tax on Winnings:** 10%",
+            f"**Max per User:** 10 tickets\n"
+            f"**Tax on Winnings:** 10%\n\n"
+            f"**Your Tickets:** {user_tickets}/10",
             color=disnake.Color.purple(),
         )
-        await inter.response.send_message(embed=embed)
-        # Delete after 5 seconds
-        await asyncio.sleep(5)
-        await inter.delete_original_response()
+
+        # Send to lottery channel
+        lottery_channel = self.bot.get_channel(lottery_channel_id)
+        if lottery_channel:
+            await lottery_channel.send(embed=embed)
+
+        await inter.response.send_message(embed=embed, ephemeral=True)
 
     @commands.slash_command(description="[MOD] Add points to the lottery prize pool")
     async def addprize(
@@ -850,13 +1131,88 @@ class Points(commands.Cog):
             await self.add_to_lottery_pool(conn, amount)
             new_pool = await self.get_lottery_pool(conn)
 
+        lottery_channel_id = 956301076271857764
+        lottery_channel = self.bot.get_channel(lottery_channel_id)
+        if lottery_channel:
+            await lottery_channel.send(
+                f"✅ **{inter.author.mention}** added **{amount:,} {Config.POINT_NAME}** to the lottery prize pool!\n"
+                f"**New Prize Pool:** {new_pool:,} {Config.POINT_NAME}"
+            )
+
         await inter.response.send_message(
             f"✅ Added **{amount:,} {Config.POINT_NAME}** to the lottery prize pool!\n"
             f"**New Prize Pool:** {new_pool:,} {Config.POINT_NAME}",
+            ephemeral=True,
         )
-        # Delete after 5 seconds
-        await asyncio.sleep(5)
-        await inter.delete_original_response()
+
+    @commands.slash_command(
+        description="[MOD] Post a lottery purchase message with button"
+    )
+    async def lotterypost(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+        title: str = commands.Param(
+            description="Title for the lottery post",
+            default="🎰 Lottery - Buy Your Tickets!",
+        ),
+        description: str = commands.Param(
+            description="Description for the lottery post",
+            default=None,
+        ),
+    ):
+        """Post a lottery message with buy button (mod only)"""
+        # Check if user has mod role
+        mod_role = inter.guild.get_role(Config.MOD_ROLE_ID)
+        if not mod_role or mod_role not in inter.author.roles:
+            await inter.response.send_message(
+                "❌ This command is only available to moderators.", ephemeral=True
+            )
+            return
+
+        # Get current lottery pool
+        async with db.pool.acquire() as conn:
+            prize_pool = await self.get_lottery_pool(conn)
+
+        # Count total tickets sold
+        total_tickets = sum(len(users) for users in self.lottery_entries.values())
+
+        # Build description
+        if description is None:
+            description = (
+                f"**Current Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
+                f"**Tickets Sold:** {total_tickets}\n\n"
+                f"**💰 Cost:** 100 {Config.POINT_NAME} per ticket\n"
+                f"**🎫 Max:** 10 tickets per user\n"
+                f"**💸 Tax on Winnings:** 10%\n\n"
+                f"Click the button below to buy lottery tickets!\n"
+                f"Enter space-separated numbers (e.g. `10 12 15`)"
+            )
+
+        embed = disnake.Embed(
+            title=title,
+            description=description,
+            color=disnake.Color.gold(),
+        )
+        embed.set_footer(text="Pick numbers from 00-99 • Good luck!")
+
+        # Create view with buy button
+        view = LotteryBuyView(self)
+
+        # Send to lottery channel
+        lottery_channel_id = 956301076271857764
+        lottery_channel = self.bot.get_channel(lottery_channel_id)
+
+        if lottery_channel:
+            await lottery_channel.send(embed=embed, view=view)
+            await inter.response.send_message(
+                f"✅ Lottery post sent to <#{lottery_channel_id}>!",
+                ephemeral=True,
+            )
+        else:
+            await inter.response.send_message(
+                "❌ Could not find the lottery channel.",
+                ephemeral=True,
+            )
 
     @commands.slash_command(description="Show current tax pool")
     async def showtax(self, inter: disnake.ApplicationCommandInteraction):
@@ -1254,31 +1610,6 @@ class Points(commands.Cog):
             )
             return
 
-        # Check if attacker has active ceasefire - break it if so
-        attacker_broke_ceasefire = False
-        if user_id in self.active_ceasefires:
-            ceasefire_time = self.active_ceasefires[user_id]
-            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
-                # Remove ceasefire
-                del self.active_ceasefires[user_id]
-                attacker_broke_ceasefire = True
-
-                # Apply 10-minute debuff
-                self.ceasefire_breakers[user_id] = now
-
-                # Send notification to channel 1456204479203639340
-                notification_channel = self.bot.get_channel(1456204479203639340)
-                if notification_channel:
-                    embed = disnake.Embed(
-                        title="⚠️ Ceasefire Broken!",
-                        description=f"{inter.author.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
-                        color=disnake.Color.red(),
-                    )
-                    await notification_channel.send(embed=embed)
-            else:
-                # Expired ceasefire, clean up
-                del self.active_ceasefires[user_id]
-
         async with db.pool.acquire() as conn:
             # Get both users' points
             attacker_points = await conn.fetchval(
@@ -1321,30 +1652,12 @@ class Points(commands.Cog):
                 )
                 return
 
-            # Check if target has active ceasefire
-            target_has_ceasefire = False
-            if target.id in self.active_ceasefires:
-                ceasefire_time = self.active_ceasefires[target.id]
-                active_duration = getattr(self, "active_ceasefire_durations", {}).get(
-                    target.id, 600
-                )
-                if (now - ceasefire_time).total_seconds() < active_duration:
-                    target_has_ceasefire = True
-                else:
-                    # Expired ceasefire, clean up
-                    del self.active_ceasefires[target.id]
-                    if (
-                        hasattr(self, "active_ceasefire_durations")
-                        and target.id in self.active_ceasefire_durations
-                    ):
-                        del self.active_ceasefire_durations[target.id]
-
-            if target_has_ceasefire:
-                await inter.response.send_message(
-                    f"☮️ {target.mention} has an active ceasefire! They cannot be attacked right now.",
-                    ephemeral=True,
-                )
-                return
+            # Check if target has active shield
+            target_has_shield = False
+            if target.id in self.active_shields:
+                shield_time = self.active_shields[target.id]
+                if (now - shield_time).total_seconds() < 900:  # 15 minutes
+                    target_has_shield = True
 
             # Check if target has active dodge
             target_has_dodge = False
@@ -1370,14 +1683,9 @@ class Points(commands.Cog):
                 if target_points > 3000:
                     win_chance += 0.15
 
-                # Ceasefire breaker debuff: +20% win chance when attacking someone who broke their ceasefire
-                if target.id in self.ceasefire_breakers:
-                    debuff_time = self.ceasefire_breakers[target.id]
-                    if (now - debuff_time).total_seconds() < 600:  # 10 minutes
-                        win_chance += 0.20
-                    else:
-                        # Expired debuff, clean up
-                        del self.ceasefire_breakers[target.id]
+                # Super rich target bonus: +10% win chance when attacking players with >10000 points
+                if target_points > 10000:
+                    win_chance += 0.10
 
                 # Ensure win_chance stays within 0-1 range
                 win_chance = max(0.0, min(1.0, win_chance))
@@ -1408,6 +1716,12 @@ class Points(commands.Cog):
                 if target_points > 10000:
                     bonus = int(amount * 0.10)
                     actual_steal_amount = amount + bonus
+
+                # Apply shield reduction - attacker only gains 75% if target has shield
+                shield_reduced = False
+                if target_has_shield:
+                    actual_steal_amount = int(actual_steal_amount * 0.75)
+                    shield_reduced = True
 
                 # Calculate 5% tax on the steal amount
                 tax_amount = int(actual_steal_amount * 0.05)
@@ -1467,6 +1781,8 @@ class Points(commands.Cog):
                         description += f"\n💰 Super rich target (+10% bonus)!"
                     elif target_points > 3000:
                         description += f"\n💎 Rich target bonus applied!"
+                    if shield_reduced:
+                        description += f"\n🛡️ Shield active (attacker gained only 75%)"
                     description += f"\n🎲 Win chance: {int(win_chance * 100)}%"
 
                     embed = disnake.Embed(
@@ -1700,15 +2016,25 @@ class Points(commands.Cog):
         # Set multiattack cooldown immediately (before attacks start)
         self.multiattack_cooldowns[user_id] = datetime.datetime.now()
 
+        # Check if user has fast multiattack role (10 sec instead of 30 sec)
+        fast_multiattack_role_id = 1463516498197745749
+        attack_delay = 30  # Default delay
+        if inter.guild:
+            member = inter.guild.get_member(inter.author.id)
+            if member:
+                fast_role = inter.guild.get_role(fast_multiattack_role_id)
+                if fast_role and fast_role in member.roles:
+                    attack_delay = 10
+
         # Initial response
         await inter.response.send_message(
-            f"⚔️ Starting multiattack: {times} attacks on {target.mention} with {amount} points each (30 seconds between attacks)...",
+            f"⚔️ Starting multiattack: {times} attacks on {target.mention} with {amount} points each ({attack_delay} seconds between attacks)...",
             ephemeral=True,
         )
 
         # Send notification to channel (will auto-delete after 10 seconds)
         notification_msg = await inter.channel.send(
-            f"⚔️ {target.mention} **INCOMING MULTIATTACK!** {inter.author.mention} is launching **{times} attacks** with **{amount} points** each (1 attack per 30 seconds)"
+            f"⚔️ {target.mention} **INCOMING MULTIATTACK!** {inter.author.mention} is launching **{times} attacks** with **{amount} points** each (1 attack per {attack_delay} seconds)"
         )
 
         # Schedule deletion without blocking (so multiple multiattacks don't interfere)
@@ -1730,18 +2056,30 @@ class Points(commands.Cog):
 
         # Execute attacks
         skipped_attacks = 0
+        countered_attacks = 0
         for i in range(times):
-            # Wait 30 seconds between attacks (except first one)
+            # Wait between attacks (except first one)
             if i > 0:
-                await asyncio.sleep(30)
+                await asyncio.sleep(attack_delay)
+
+            # Check if target has active counter against attacker
+            is_countered = False
+            if target.id in self.active_counters:
+                if user_id in self.active_counters[target.id]:
+                    counter_time = self.active_counters[target.id][user_id]
+                    if (
+                        datetime.datetime.now() - counter_time
+                    ).total_seconds() < 900:  # 15 minutes
+                        is_countered = True
+                        countered_attacks += 1
 
             # Perform single attack using same logic as regular attack
             attack_result = await self._perform_single_attack(
-                inter.author, target, amount
+                inter.author, target, amount, is_countered=is_countered
             )
 
             if attack_result is None:
-                # Attack couldn't be performed (ceasefire, defense cap, etc.)
+                # Attack couldn't be performed (defense cap, shield, etc.)
                 skipped_attacks += 1
                 continue
 
@@ -1757,7 +2095,11 @@ class Points(commands.Cog):
         summary += f"**Attacks:** {successful_attacks + failed_attacks}/{times}\n"
         if skipped_attacks > 0:
             summary += (
-                f"**Skipped:** {skipped_attacks} (target had ceasefire/defense cap)\n"
+                f"**Skipped:** {skipped_attacks} (target had shield/defense cap)\n"
+            )
+        if countered_attacks > 0:
+            summary += (
+                f"**Countered:** {countered_attacks} (target had counter active)\n"
             )
         summary += (
             f"**Successful:** {successful_attacks} | **Failed:** {failed_attacks}\n"
@@ -1795,45 +2137,14 @@ class Points(commands.Cog):
                 )
             await attack_channel.send(embed=embed)
 
-    async def _perform_single_attack(self, attacker, target, amount):
+    async def _perform_single_attack(
+        self, attacker, target, amount, is_countered=False
+    ):
         """Helper method to perform a single attack - returns result dict or None if attack couldn't be performed"""
         now = datetime.datetime.now()
         user_id = attacker.id
 
-        # Check if attacker has active ceasefire - break it if so
-        attacker_broke_ceasefire = False
-        if user_id in self.active_ceasefires:
-            ceasefire_time = self.active_ceasefires[user_id]
-            active_duration = getattr(self, "active_ceasefire_durations", {}).get(
-                user_id, 600
-            )
-            if (now - ceasefire_time).total_seconds() < active_duration:
-                attacker_broke_ceasefire = True
-                del self.active_ceasefires[user_id]
-                if (
-                    hasattr(self, "active_ceasefire_durations")
-                    and user_id in self.active_ceasefire_durations
-                ):
-                    del self.active_ceasefire_durations[user_id]
-
-                self.ceasefire_breakers[user_id] = now
-
-                notification_channel = self.bot.get_channel(1456204479203639340)
-                if notification_channel:
-                    embed = disnake.Embed(
-                        title="⚠️ Ceasefire Broken!",
-                        description=f"{attacker.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
-                        color=disnake.Color.red(),
-                    )
-                    await notification_channel.send(embed=embed)
-
         async with db.pool.acquire() as conn:
-            # Clear ceasefire from database if it was broken
-            if attacker_broke_ceasefire:
-                await conn.execute(
-                    "UPDATE users SET ceasefire_activated_at = NULL, ceasefire_duration = NULL WHERE user_id = $1",
-                    user_id,
-                )
             attacker_points = await conn.fetchval(
                 "SELECT points FROM users WHERE user_id = $1", attacker.id
             )
@@ -1857,14 +2168,12 @@ class Points(commands.Cog):
             if target_defense_losses >= 100000:
                 return None
 
-            # Check if target has active ceasefire
-            if target.id in self.active_ceasefires:
-                ceasefire_time = self.active_ceasefires[target.id]
-                active_duration = getattr(self, "active_ceasefire_durations", {}).get(
-                    target.id, 600
-                )
-                if (now - ceasefire_time).total_seconds() < active_duration:
-                    return None
+            # Check if target has active shield
+            target_has_shield = False
+            if target.id in self.active_shields:
+                shield_time = self.active_shields[target.id]
+                if (now - shield_time).total_seconds() < 900:  # 15 minutes
+                    target_has_shield = True
 
             # Check if target has active dodge
             target_has_dodge = False
@@ -1877,14 +2186,15 @@ class Points(commands.Cog):
             # Calculate success
             if target_has_dodge:
                 success = False
+            elif is_countered:
+                # Counter active: flat 20% success rate regardless of target's wealth
+                success = random.random() < 0.20
             else:
                 win_chance = 0.45
                 if target_points > 3000:
                     win_chance += 0.15
-                if target.id in self.ceasefire_breakers:
-                    debuff_time = self.ceasefire_breakers[target.id]
-                    if (now - debuff_time).total_seconds() < 600:
-                        win_chance += 0.20
+                if target_points > 10000:
+                    win_chance += 0.10
                 win_chance = max(0.0, min(1.0, win_chance))
                 success = random.random() < win_chance
 
@@ -1905,6 +2215,12 @@ class Points(commands.Cog):
                 if target_points > 10000:
                     bonus = int(actual_amount * 0.10)
                     actual_steal_amount = actual_amount + bonus
+
+                # Apply shield reduction - attacker only gains 75% if target has shield
+                shield_reduced = False
+                if target_has_shield:
+                    actual_steal_amount = int(actual_steal_amount * 0.75)
+                    shield_reduced = True
 
                 tax_amount = int(actual_steal_amount * 0.05)
                 attacker_gain = actual_steal_amount - tax_amount
@@ -1953,6 +2269,8 @@ class Points(commands.Cog):
                         description += f" ({tax_amount} tax)"
                     if target_points > 10000:
                         description += f"\n💰 Super rich target (+10% bonus)!"
+                    if shield_reduced:
+                        description += f"\n🛡️ Shield active (attacker gained only 75%)"
                     embed = disnake.Embed(
                         title="💥 Attack Successful!",
                         description=description,
@@ -2090,31 +2408,6 @@ class Points(commands.Cog):
             await inter.response.send_message("You cannot attack bots.", ephemeral=True)
             return
 
-        # Check if attacker has active ceasefire - break it if so
-        attacker_broke_ceasefire = False
-        if user_id in self.active_ceasefires:
-            ceasefire_time = self.active_ceasefires[user_id]
-            if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
-                # Remove ceasefire
-                del self.active_ceasefires[user_id]
-                attacker_broke_ceasefire = True
-
-                # Apply 10-minute debuff
-                self.ceasefire_breakers[user_id] = now
-
-                # Send notification to channel 1456204479203639340
-                notification_channel = self.bot.get_channel(1456204479203639340)
-                if notification_channel:
-                    embed = disnake.Embed(
-                        title="⚠️ Ceasefire Broken!",
-                        description=f"{inter.author.mention} has broken their ceasefire by attacking! They now have a 10-minute debuff (easier to attack).",
-                        color=disnake.Color.red(),
-                    )
-                    await notification_channel.send(embed=embed)
-            else:
-                # Expired ceasefire, clean up
-                del self.active_ceasefires[user_id]
-
         async with db.pool.acquire() as conn:
             # Get both users' points
             attacker_points = await conn.fetchval(
@@ -2138,30 +2431,6 @@ class Points(commands.Cog):
             if target_points < amount:
                 await inter.response.send_message(
                     f"{target.mention} doesn't have enough {Config.POINT_NAME} to attack (needs {amount}).",
-                    ephemeral=True,
-                )
-                return
-
-            # Check if target has active ceasefire
-            target_has_ceasefire = False
-            if target.id in self.active_ceasefires:
-                ceasefire_time = self.active_ceasefires[target.id]
-                active_duration = self.active_ceasefire_durations.get(
-                    target.id, 600
-                )  # Default to 10 minutes
-                if (
-                    datetime.datetime.now() - ceasefire_time
-                ).total_seconds() < active_duration:
-                    target_has_ceasefire = True
-                else:
-                    # Expired ceasefire, clean up
-                    del self.active_ceasefires[target.id]
-                    if target.id in self.active_ceasefire_durations:
-                        del self.active_ceasefire_durations[target.id]
-
-            if target_has_ceasefire:
-                await inter.response.send_message(
-                    f"☮️ {target.mention} has an active ceasefire! They cannot be attacked right now.",
                     ephemeral=True,
                 )
                 return
@@ -2507,73 +2776,124 @@ class Points(commands.Cog):
             ephemeral=True,
         )
 
-    @commands.slash_command(description="Activate ceasefire to prevent all attacks")
-    async def ceasefire(
+    @commands.slash_command(description="Counter a specific user's multiattack")
+    async def counter(
         self,
         inter: disnake.ApplicationCommandInteraction,
-        duration: str = commands.Param(
-            description="Duration: normal (10min) or fullday (1440min)",
-            choices=["normal", "fullday"],
-            default="normal",
+        target: disnake.User = commands.Param(
+            description="User whose multiattack to counter"
         ),
     ):
-        """Activate ceasefire to be immune from attacks (costs 100 points for 10 min, or 3000 points for fullday)"""
+        """Counter a specific user's multiattack (costs 1000 points, reduces their success to 20% for 15 minutes)"""
         now = datetime.datetime.now()
         user_id = inter.author.id
+        cost = 1000
+        duration_seconds = 900  # 15 minutes
+        cooldown_seconds = 1800  # 30 minutes
 
-        # Set duration and cost based on choice
-        if duration == "fullday":
-            cost = 3000
-            duration_seconds = 86400  # 1440 minutes = 24 hours
-            cooldown_seconds = 259200  # 3 days
-            duration_display = "24 hours (1440 minutes)"
-        else:  # normal
-            cost = 100
-            duration_seconds = 600  # 10 minutes
-            cooldown_seconds = 600  # 10 minutes
-            duration_display = "10 minutes"
+        # Can't counter yourself
+        if target.id == user_id:
+            await inter.response.send_message(
+                "You cannot counter yourself.",
+                ephemeral=True,
+            )
+            return
 
-        # Check cooldown based on last ceasefire type
-        if user_id in self.ceasefire_cooldowns:
-            # Get the cooldown duration for the last ceasefire used
-            last_cooldown = self.ceasefire_cooldown_durations.get(user_id, 600)
-            time_passed = (now - self.ceasefire_cooldowns[user_id]).total_seconds()
-            if time_passed < last_cooldown:
-                remaining_time = last_cooldown - time_passed
-                if remaining_time >= 86400:  # Show in days if >= 1 day
-                    remaining_days = int(remaining_time / 86400)
-                    remaining_hours = int((remaining_time % 86400) / 3600)
-                    time_display = f"{remaining_days}d {remaining_hours}h"
-                elif remaining_time >= 3600:  # Show in hours if >= 1 hour
-                    remaining_hours = int(remaining_time / 3600)
-                    remaining_mins = int((remaining_time % 3600) / 60)
-                    time_display = f"{remaining_hours}h {remaining_mins}m"
-                else:  # Show in minutes
-                    remaining_mins = int(remaining_time / 60)
-                    remaining_secs = int(remaining_time % 60)
-                    time_display = f"{remaining_mins}m {remaining_secs}s"
-
+        # Check cooldown (30 minutes)
+        if user_id in self.counter_cooldowns:
+            time_passed = (now - self.counter_cooldowns[user_id]).total_seconds()
+            if time_passed < cooldown_seconds:
+                remaining_mins = int((cooldown_seconds - time_passed) / 60)
+                remaining_secs = int((cooldown_seconds - time_passed) % 60)
                 await inter.response.send_message(
-                    f"⏰ You need to wait {time_display} before using ceasefire again.",
+                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using counter again.",
                     ephemeral=True,
                 )
                 return
 
-        # Check if already has active ceasefire
-        if user_id in self.active_ceasefires:
-            ceasefire_time = self.active_ceasefires[user_id]
-            # Check against the currently active duration (could be normal or fullday)
-            active_duration = getattr(self, "active_ceasefire_durations", {}).get(
-                user_id, 600
+        # Check if already has active counter against this target
+        if user_id in self.active_counters:
+            if target.id in self.active_counters[user_id]:
+                counter_time = self.active_counters[user_id][target.id]
+                if (now - counter_time).total_seconds() < duration_seconds:
+                    remaining_secs = int(
+                        duration_seconds - (now - counter_time).total_seconds()
+                    )
+                    remaining_mins = remaining_secs // 60
+                    remaining_secs = remaining_secs % 60
+                    await inter.response.send_message(
+                        f"🛡️ You already have an active counter against {target.display_name}! ({remaining_mins}m {remaining_secs}s remaining)",
+                        ephemeral=True,
+                    )
+                    return
+
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.author.id
             )
-            if (now - ceasefire_time).total_seconds() < active_duration:
+            user_points = user_points or 0
+
+            if user_points < cost:
+                await inter.response.send_message(
+                    f"You need at least {cost} {Config.POINT_NAME} to activate counter.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct points
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                cost,
+                inter.author.id,
+            )
+
+        # Activate counter
+        if user_id not in self.active_counters:
+            self.active_counters[user_id] = {}
+        self.active_counters[user_id][target.id] = now
+        self.counter_cooldowns[user_id] = now
+
+        await inter.response.send_message(
+            f"🎯 **Counter activated!** (-{cost} {Config.POINT_NAME})\n"
+            f"If **{target.display_name}** uses multiattack on you within 15 minutes, their success rate drops to 20%!",
+            ephemeral=True,
+        )
+
+    @commands.slash_command(description="Activate shield to reduce attacker gains")
+    async def shield(
+        self,
+        inter: disnake.ApplicationCommandInteraction,
+    ):
+        """Activate shield - attackers only gain 75% on success (costs 500 points, lasts 15 minutes)"""
+        now = datetime.datetime.now()
+        user_id = inter.author.id
+        cost = 500
+        duration_seconds = 900  # 15 minutes
+        cooldown_seconds = 1800  # 30 minutes
+
+        # Check cooldown (30 minutes)
+        if user_id in self.shield_cooldowns:
+            time_passed = (now - self.shield_cooldowns[user_id]).total_seconds()
+            if time_passed < cooldown_seconds:
+                remaining_mins = int((cooldown_seconds - time_passed) / 60)
+                remaining_secs = int((cooldown_seconds - time_passed) % 60)
+                await inter.response.send_message(
+                    f"⏰ You need to wait {remaining_mins}m {remaining_secs}s before using shield again.",
+                    ephemeral=True,
+                )
+                return
+
+        # Check if already has active shield
+        if user_id in self.active_shields:
+            shield_time = self.active_shields[user_id]
+            if (now - shield_time).total_seconds() < duration_seconds:
                 remaining_secs = int(
-                    active_duration - (now - ceasefire_time).total_seconds()
+                    duration_seconds - (now - shield_time).total_seconds()
                 )
                 remaining_mins = remaining_secs // 60
                 remaining_secs = remaining_secs % 60
                 await inter.response.send_message(
-                    f"☮️ You already have an active ceasefire! ({remaining_mins}m {remaining_secs}s remaining)",
+                    f"🛡️ You already have an active shield! ({remaining_mins}m {remaining_secs}s remaining)",
                     ephemeral=True,
                 )
                 return
@@ -2586,7 +2906,7 @@ class Points(commands.Cog):
 
             if user_points < cost:
                 await inter.response.send_message(
-                    f"You need at least {cost} {Config.POINT_NAME} to activate ceasefire.",
+                    f"You need at least {cost} {Config.POINT_NAME} to activate shield.",
                     ephemeral=True,
                 )
                 return
@@ -2598,28 +2918,26 @@ class Points(commands.Cog):
                 inter.author.id,
             )
 
-            # Save ceasefire to database for persistence
-            await conn.execute(
-                "UPDATE users SET ceasefire_activated_at = $1, ceasefire_duration = $2 WHERE user_id = $3",
-                now,
-                duration_seconds,
-                inter.author.id,
-            )
-
-        # Activate ceasefire and track duration
-        self.active_ceasefires[user_id] = now
-        self.ceasefire_cooldowns[user_id] = now
-        self.ceasefire_cooldown_durations[user_id] = (
-            cooldown_seconds  # Store the cooldown duration
-        )
-        if not hasattr(self, "active_ceasefire_durations"):
-            self.active_ceasefire_durations = {}
-        self.active_ceasefire_durations[user_id] = duration_seconds
+        # Activate shield
+        self.active_shields[user_id] = now
+        self.shield_cooldowns[user_id] = now
 
         await inter.response.send_message(
-            f"☮️ **Ceasefire activated!** (-{cost} {Config.POINT_NAME}) You are immune from all attacks for {duration_display}!",
+            f"🛡️ **Shield activated!** (-{cost} {Config.POINT_NAME})\n"
+            f"For 15 minutes, attackers will only gain 75% of their winnings when attacking you!",
             ephemeral=True,
         )
+
+        # Send notification to attack channel
+        attack_channel = self.bot.get_channel(1456204479203639340)
+        if attack_channel:
+            embed = disnake.Embed(
+                title="🛡️ Shield Activated!",
+                description=f"{inter.author.mention} has activated a shield!\n\n"
+                f"For 15 minutes, attackers will only gain 75% of their winnings!",
+                color=disnake.Color.blue(),
+            )
+            await attack_channel.send(embed=embed)
 
     @commands.slash_command(
         description="Timeout a user by sacrificing half your points"
@@ -3947,7 +4265,7 @@ class Points(commands.Cog):
                     inline=False,
                 )
 
-        # Active effects (ceasefire, debuff) - Note: Dodge is NOT shown to keep it strategic
+        # Active effects (shield, counter) - Note: Dodge is NOT shown to keep it strategic
         active_effects = []
         now = datetime.datetime.now()
 
@@ -3960,21 +4278,27 @@ class Points(commands.Cog):
         #         remaining_secs = remaining_secs % 60
         #         active_effects.append(f"🛡️ Dodge: {remaining_mins}m {remaining_secs}s")
 
-        # Check ceasefire
-        if target.id in self.active_ceasefires:
-            ceasefire_time = self.active_ceasefires[target.id]
-            ceasefire_duration = self.active_ceasefire_durations.get(
-                target.id, 600
-            )  # Default to 10 minutes
-            if (now - ceasefire_time).total_seconds() < ceasefire_duration:
-                remaining_secs = int(
-                    ceasefire_duration - (now - ceasefire_time).total_seconds()
-                )
+        # Check shield
+        if target.id in self.active_shields:
+            shield_time = self.active_shields[target.id]
+            if (now - shield_time).total_seconds() < 900:  # 15 minutes
+                remaining_secs = int(900 - (now - shield_time).total_seconds())
                 remaining_mins = remaining_secs // 60
                 remaining_secs = remaining_secs % 60
-                active_effects.append(
-                    f"☮️ Ceasefire: {remaining_mins}m {remaining_secs}s"
-                )
+                active_effects.append(f"🛡️ Shield: {remaining_mins}m {remaining_secs}s")
+
+        # Check counter (show who they have countered)
+        if target.id in self.active_counters:
+            for attacker_id, counter_time in list(
+                self.active_counters[target.id].items()
+            ):
+                if (now - counter_time).total_seconds() < 900:  # 15 minutes
+                    remaining_secs = int(900 - (now - counter_time).total_seconds())
+                    remaining_mins = remaining_secs // 60
+                    remaining_secs = remaining_secs % 60
+                    active_effects.append(
+                        f"🎯 Counter: {remaining_mins}m {remaining_secs}s"
+                    )
 
         if active_effects:
             embed.add_field(
@@ -4163,6 +4487,194 @@ class BegModal(disnake.ui.Modal):
         else:
             await inter.response.send_message(
                 "❌ Could not find the beg channel.", ephemeral=True
+            )
+
+
+class LotteryBuyView(disnake.ui.View):
+    def __init__(self, points_cog):
+        super().__init__(timeout=None)
+        self.points_cog = points_cog
+
+    @disnake.ui.button(
+        label="Buy Lottery Tickets", style=disnake.ButtonStyle.success, emoji="🎫"
+    )
+    async def buy_lottery(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Open modal to buy lottery tickets"""
+        # Check user's current ticket count
+        current_count = self.points_cog.lottery_user_count.get(inter.user.id, 0)
+        max_tickets = 10
+
+        if current_count >= max_tickets:
+            await inter.response.send_message(
+                f"❌ You have already purchased the maximum of {max_tickets} lottery tickets.",
+                ephemeral=True,
+            )
+            return
+
+        remaining = max_tickets - current_count
+        modal = LotteryBuyModal(self.points_cog, remaining, current_count)
+        await inter.response.send_modal(modal)
+
+    @disnake.ui.button(
+        label="Check Status", style=disnake.ButtonStyle.secondary, emoji="🔍"
+    )
+    async def check_status(
+        self, button: disnake.ui.Button, inter: disnake.MessageInteraction
+    ):
+        """Check lottery status"""
+        async with db.pool.acquire() as conn:
+            prize_pool = await self.points_cog.get_lottery_pool(conn)
+
+        # Count total tickets sold
+        total_tickets = sum(
+            len(users) for users in self.points_cog.lottery_entries.values()
+        )
+        unique_participants = len(self.points_cog.lottery_user_count)
+
+        # Get user's current ticket count
+        user_tickets = self.points_cog.lottery_user_count.get(inter.user.id, 0)
+
+        await inter.response.send_message(
+            f"🎫 **Lottery Status**\n"
+            f"**Prize Pool:** {prize_pool:,} {Config.POINT_NAME}\n"
+            f"**Total Tickets Sold:** {total_tickets}\n"
+            f"**Participants:** {unique_participants}\n\n"
+            f"**Your Tickets:** {user_tickets}/10",
+            ephemeral=True,
+        )
+
+
+class LotteryBuyModal(disnake.ui.Modal):
+    def __init__(self, points_cog, remaining_slots: int, current_count: int):
+        self.points_cog = points_cog
+        self.remaining_slots = remaining_slots
+        self.current_count = current_count
+        components = [
+            disnake.ui.TextInput(
+                label=f"Enter numbers (max {remaining_slots} more)",
+                placeholder="Space-separated numbers 0-99 (e.g. 10 12 15)",
+                custom_id="numbers",
+                style=disnake.TextInputStyle.short,
+                min_length=1,
+                max_length=50,
+            ),
+        ]
+        super().__init__(title="Buy Lottery Tickets", components=components)
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        numbers_input = inter.text_values["numbers"]
+        cost_per_ticket = 100
+        max_tickets_per_user = 10
+        lottery_channel_id = 956301076271857764
+
+        # Parse numbers
+        try:
+            number_list = [int(n.strip()) for n in numbers_input.split() if n.strip()]
+        except ValueError:
+            await inter.response.send_message(
+                "❌ Invalid input. Please enter numbers only (e.g. '10 12 15').",
+                ephemeral=True,
+            )
+            return
+
+        # Validate all numbers are in range 0-99
+        invalid_numbers = [n for n in number_list if n < 0 or n > 99]
+        if invalid_numbers:
+            await inter.response.send_message(
+                f"❌ Invalid numbers: {invalid_numbers}. Numbers must be between 0-99.",
+                ephemeral=True,
+            )
+            return
+
+        if not number_list:
+            await inter.response.send_message(
+                "❌ Please enter at least one number.",
+                ephemeral=True,
+            )
+            return
+
+        # Check current user ticket count (re-check in case of race condition)
+        current_count = self.points_cog.lottery_user_count.get(inter.user.id, 0)
+        remaining_slots = max_tickets_per_user - current_count
+
+        if remaining_slots <= 0:
+            await inter.response.send_message(
+                f"❌ You have already purchased the maximum of {max_tickets_per_user} lottery tickets.",
+                ephemeral=True,
+            )
+            return
+
+        # Limit to remaining slots
+        if len(number_list) > remaining_slots:
+            await inter.response.send_message(
+                f"❌ You can only buy {remaining_slots} more ticket(s). "
+                f"You already have {current_count}/{max_tickets_per_user} tickets.",
+                ephemeral=True,
+            )
+            return
+
+        total_cost = cost_per_ticket * len(number_list)
+
+        # Check if user has enough points
+        async with db.pool.acquire() as conn:
+            user_points = await conn.fetchval(
+                "SELECT points FROM users WHERE user_id = $1", inter.user.id
+            )
+            user_points = user_points or 0
+
+            if user_points < total_cost:
+                await inter.response.send_message(
+                    f"You need at least {total_cost} {Config.POINT_NAME} to buy {len(number_list)} lottery ticket(s). "
+                    f"You have {user_points:,}.",
+                    ephemeral=True,
+                )
+                return
+
+            # Deduct cost
+            await conn.execute(
+                "UPDATE users SET points = points - $1 WHERE user_id = $2",
+                total_cost,
+                inter.user.id,
+            )
+
+            # Add to lottery pool
+            await self.points_cog.add_to_lottery_pool(conn, total_cost)
+
+        # Add user to lottery entries for each number
+        for number in number_list:
+            if number not in self.points_cog.lottery_entries:
+                self.points_cog.lottery_entries[number] = []
+            self.points_cog.lottery_entries[number].append(inter.user.id)
+
+        # Update user ticket count
+        self.points_cog.lottery_user_count[inter.user.id] = current_count + len(
+            number_list
+        )
+        new_count = self.points_cog.lottery_user_count[inter.user.id]
+
+        # Format numbers for display
+        numbers_display = ", ".join([f"{n:02d}" for n in number_list])
+
+        # Send confirmation to user
+        await inter.response.send_message(
+            f"🎫 **Lottery Ticket Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+            f"Your numbers: **{numbers_display}**\n"
+            f"Tickets owned: {new_count}/{max_tickets_per_user}\n"
+            f"Good luck!",
+            ephemeral=True,
+        )
+
+        # Send to lottery channel
+        lottery_channel = inter.guild.get_channel(lottery_channel_id)
+        if lottery_channel:
+            await lottery_channel.send(
+                f"🎫 **Lottery Ticket Purchased!** (-{total_cost} {Config.POINT_NAME})\n"
+                f"**Buyer:** {inter.user.mention}\n"
+                f"**Numbers:** {numbers_display}\n"
+                f"**Tickets:** {len(number_list)} | **Total owned:** {new_count}/{max_tickets_per_user}\n"
+                f"Good luck!"
             )
 
 
@@ -4391,22 +4903,12 @@ class AttackBeggarModal(disnake.ui.Modal):
                 )
                 return
 
-            # Check if beggar has active ceasefire
-            target_has_ceasefire = False
-            if self.beggar_id in self.points_cog.active_ceasefires:
-                ceasefire_time = self.points_cog.active_ceasefires[self.beggar_id]
-                if (now - ceasefire_time).total_seconds() < 900:  # 15 minutes
-                    target_has_ceasefire = True
-                else:
-                    # Expired ceasefire, clean up
-                    del self.points_cog.active_ceasefires[self.beggar_id]
-
-            if target_has_ceasefire:
-                await inter.response.send_message(
-                    f"☮️ Target has an active ceasefire! They cannot be attacked right now.",
-                    ephemeral=True,
-                )
-                return
+            # Check if beggar has active shield
+            target_has_shield = False
+            if self.beggar_id in self.points_cog.active_shields:
+                shield_time = self.points_cog.active_shields[self.beggar_id]
+                if (now - shield_time).total_seconds() < 900:  # 15 minutes
+                    target_has_shield = True
 
             # Check if target has active dodge
             target_has_dodge = False
@@ -4452,20 +4954,25 @@ class AttackBeggarModal(disnake.ui.Modal):
             self.points_cog.beg_attack_cooldowns[user_id] = now
 
             if success:
+                # Apply shield reduction - attacker only gains 75% if target has shield
+                actual_amount = amount
+                if target_has_shield:
+                    actual_amount = int(amount * 0.75)
+
                 # Calculate 5% tax
-                tax_amount = int(amount * 0.05)
-                attacker_gain = amount - tax_amount
+                tax_amount = int(actual_amount * 0.05)
+                attacker_gain = actual_amount - tax_amount
 
                 # Attacker wins - steal the amount (minus tax) and track profit_beg
                 await conn.execute(
                     "UPDATE users SET points = points + $1, cumulative_attack_gains = cumulative_attack_gains + $2, profit_beg = profit_beg + $1 WHERE user_id = $3",
                     attacker_gain,
-                    amount,
+                    actual_amount,
                     inter.user.id,
                 )
                 await conn.execute(
                     "UPDATE users SET points = points - $1 WHERE user_id = $2",
-                    amount,
+                    actual_amount,
                     self.beggar_id,
                 )
 
@@ -4490,6 +4997,8 @@ class AttackBeggarModal(disnake.ui.Modal):
                 msg = f"💥 **Attack successful!** {inter.user.mention} gained **{attacker_gain:,} {Config.POINT_NAME}**"
                 if tax_amount > 0:
                     msg += f" ({tax_amount} tax collected)"
+                if target_has_shield:
+                    msg += f" (🛡️ shield reduced gains to 75%)"
                 msg += f" from {beggar_name}!"
 
                 await inter.response.send_message(msg, ephemeral=False)
@@ -4534,39 +5043,9 @@ class AttackBeggarModal(disnake.ui.Modal):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Start the daily tax task when bot is ready and load active ceasefires"""
+        """Start the daily tax task when bot is ready"""
         if not self.daily_tax_task.is_running():
             self.daily_tax_task.start()
-
-        # Load active ceasefires from database
-        await self.load_active_ceasefires()
-
-    async def load_active_ceasefires(self):
-        """Load active ceasefires from database on startup"""
-        if db.pool is None:
-            return
-
-        async with db.pool.acquire() as conn:
-            active_ceasefires = await conn.fetch(
-                "SELECT user_id, ceasefire_activated_at, ceasefire_duration FROM users WHERE ceasefire_activated_at IS NOT NULL"
-            )
-
-            now = datetime.datetime.now()
-            for row in active_ceasefires:
-                user_id = row["user_id"]
-                activated_at = row["ceasefire_activated_at"]
-                duration = row["ceasefire_duration"]
-
-                # Check if ceasefire is still active
-                if (now - activated_at).total_seconds() < duration:
-                    self.active_ceasefires[user_id] = activated_at
-                    self.active_ceasefire_durations[user_id] = duration
-                else:
-                    # Expired, clear from database
-                    await conn.execute(
-                        "UPDATE users SET ceasefire_activated_at = NULL, ceasefire_duration = NULL WHERE user_id = $1",
-                        user_id,
-                    )
 
     @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=BANGKOK_TZ))
     async def daily_tax_task(self):
