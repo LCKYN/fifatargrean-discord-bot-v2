@@ -1554,7 +1554,7 @@ class Points(commands.Cog):
         inter: disnake.ApplicationCommandInteraction,
         target: disnake.User = commands.Param(description="User to attack"),
         amount: int = commands.Param(
-            description="Points to risk (25-500)", ge=25, le=500, default=50
+            description="Points to risk (min 25)", ge=25, default=50
         ),
     ):
         # Check cooldown (20 seconds)
@@ -1955,7 +1955,7 @@ class Points(commands.Cog):
             description="Number of attacks (2-30)", ge=2, le=30
         ),
         amount: int = commands.Param(
-            description="Points to risk per attack (25-500)", ge=25, le=500, default=50
+            description="Points to risk per attack (min 25)", ge=25, default=50
         ),
     ):
         """Attack a user multiple times with 30 seconds between each attack"""
